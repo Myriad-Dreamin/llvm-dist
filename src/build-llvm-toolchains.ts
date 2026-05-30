@@ -22,7 +22,6 @@ export type PackageProfileName =
 export interface TargetTripleDefinition {
   readonly triple: string;
   readonly llvmTarget: LlvmTargetName;
-  readonly platform: string;
 }
 
 export interface PackageProfile {
@@ -114,7 +113,7 @@ interface CliOptions {
   readonly artifactDir: string;
   readonly packagePrefix: string;
   readonly packageProfiles: readonly PackageProfileName[];
-  readonly platform: string;
+  readonly packageTarget: string;
   readonly targetTriples: readonly string[];
   readonly llvmTargetsToBuild: readonly string[];
   readonly descriptorName: string;
@@ -137,57 +136,46 @@ export const DEFAULT_TARGET_TRIPLES = [
   {
     triple: "x86_64-pc-windows-msvc",
     llvmTarget: "X86",
-    platform: "windows-x64",
   },
   {
     triple: "x86_64-unknown-linux-gnu",
     llvmTarget: "X86",
-    platform: "linux-x64",
   },
   {
     triple: "x86_64-unknown-linux-musl",
     llvmTarget: "X86",
-    platform: "linux-x64-musl",
   },
   {
     triple: "x86_64-apple-darwin",
     llvmTarget: "X86",
-    platform: "darwin-x64",
   },
   {
     triple: "aarch64-apple-darwin",
     llvmTarget: "AArch64",
-    platform: "darwin-arm64",
   },
   {
     triple: "aarch64-pc-windows-msvc",
     llvmTarget: "AArch64",
-    platform: "windows-arm64",
   },
   {
     triple: "aarch64-unknown-linux-gnu",
     llvmTarget: "AArch64",
-    platform: "linux-arm64",
   },
   {
     triple: "arm-unknown-linux-musleabihf",
     llvmTarget: "ARM",
-    platform: "linux-armhf-musl",
   },
   {
     triple: "armv7-unknown-linux-musleabihf",
     llvmTarget: "ARM",
-    platform: "linux-armv7-musl",
   },
   {
     triple: "riscv64gc-unknown-linux-musl",
     llvmTarget: "RISCV",
-    platform: "linux-riscv64-musl",
   },
   {
     triple: "loongarch64-unknown-linux-musl",
     llvmTarget: "LoongArch",
-    platform: "linux-loongarch64-musl",
   },
 ] as const satisfies readonly TargetTripleDefinition[];
 
@@ -195,11 +183,18 @@ const TARGET_TRIPLE_BY_NAME: ReadonlyMap<string, TargetTripleDefinition> = new M
   DEFAULT_TARGET_TRIPLES.map((definition) => [definition.triple, definition]),
 );
 
-const TARGET_TRIPLE_BY_PLATFORM: ReadonlyMap<string, TargetTripleDefinition> = new Map(
-  DEFAULT_TARGET_TRIPLES.map((definition) => [definition.platform, definition]),
-);
-
-const TARGET_TRIPLE_BY_PLATFORM_ALIAS: ReadonlyMap<string, string> = new Map([
+const TARGET_TRIPLE_BY_LEGACY_PACKAGE_TARGET: ReadonlyMap<string, string> = new Map([
+  ["windows-x64", "x86_64-pc-windows-msvc"],
+  ["linux-x64", "x86_64-unknown-linux-gnu"],
+  ["linux-x64-musl", "x86_64-unknown-linux-musl"],
+  ["darwin-x64", "x86_64-apple-darwin"],
+  ["darwin-arm64", "aarch64-apple-darwin"],
+  ["windows-arm64", "aarch64-pc-windows-msvc"],
+  ["linux-arm64", "aarch64-unknown-linux-gnu"],
+  ["linux-armhf-musl", "arm-unknown-linux-musleabihf"],
+  ["linux-armv7-musl", "armv7-unknown-linux-musleabihf"],
+  ["linux-riscv64-musl", "riscv64gc-unknown-linux-musl"],
+  ["linux-loongarch64-musl", "loongarch64-unknown-linux-musl"],
   ["win32-x64", "x86_64-pc-windows-msvc"],
   ["win32-arm64", "aarch64-pc-windows-msvc"],
 ]);
@@ -484,17 +479,16 @@ export function experimentalLlvmTargetsToBuildForVersion(
   );
 }
 
+export function targetTripleForPackageTarget(packageTarget: string): string | undefined {
+  if (TARGET_TRIPLE_BY_NAME.has(packageTarget)) {
+    return packageTarget;
+  }
+
+  return TARGET_TRIPLE_BY_LEGACY_PACKAGE_TARGET.get(packageTarget);
+}
+
 export function targetTripleForPlatform(platform: string): string | undefined {
-  if (TARGET_TRIPLE_BY_NAME.has(platform)) {
-    return platform;
-  }
-
-  const directMatch = TARGET_TRIPLE_BY_PLATFORM.get(platform)?.triple;
-  if (directMatch) {
-    return directMatch;
-  }
-
-  return TARGET_TRIPLE_BY_PLATFORM_ALIAS.get(platform);
+  return targetTripleForPackageTarget(platform);
 }
 
 export function defaultTargetTriplesForPlatform(platform: string): readonly string[] {
@@ -677,7 +671,7 @@ async function createPackageArchive(
 
   const archivePath = path.join(
     options.artifactDir,
-    `${options.packagePrefix}-${packageName}-${task.llvmTag}-${buildType}-${options.platform}.tar.xz`,
+    `${options.packagePrefix}-${packageName}-${task.llvmTag}-${buildType}-${options.packageTarget}.tar.xz`,
   );
 
   await fs.rm(archivePath, { force: true });
@@ -846,7 +840,7 @@ function buildTaskEnv(
         : undefined,
     SCRIPT_LLVM_TARGETS_TO_BUILD: llvmTargetsToBuild.join(";"),
     SCRIPT_LLVM_TAG: task.llvmTag,
-    SCRIPT_PACKAGE_PLATFORM: options.platform,
+    SCRIPT_PACKAGE_TARGET: options.packageTarget,
     SCRIPT_PACKAGE_PREFIX: options.packagePrefix,
     SCRIPT_STD_BUILD_TYPE: buildType,
     SCRIPT_TARGET_TRIPLES: options.targetTriples.join(","),
@@ -885,9 +879,9 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   let artifactDir = path.resolve("artifacts");
   let packagePrefix = "llvm-dist";
   let packageProfiles: readonly PackageProfileName[] = DEFAULT_PACKAGE_PROFILES;
-  let platform = `${process.platform}-${process.arch}`;
-  let platformWasExplicit = false;
-  let targetTriples: readonly string[] = defaultTargetTriplesForPlatform(platform);
+  let packageTarget = `${process.platform}-${process.arch}`;
+  let packageTargetWasExplicit = false;
+  let targetTriples: readonly string[] = defaultTargetTriplesForPlatform(packageTarget);
   let targetTriplesWereExplicit = false;
   let llvmTargetsToBuild: readonly string[] | undefined;
   let descriptorName = "descriptor.json";
@@ -946,9 +940,17 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
       case "--package-profiles":
         packageProfiles = parsePackageProfiles(takeValue(args, ++index, arg));
         break;
+      case "--package-target-triple":
+        packageTarget = requiredTargetTriple(takeValue(args, ++index, arg)).triple;
+        packageTargetWasExplicit = true;
+        break;
+      case "--package-target":
+        packageTarget = takeValue(args, ++index, arg);
+        packageTargetWasExplicit = true;
+        break;
       case "--platform":
-        platform = takeValue(args, ++index, arg);
-        platformWasExplicit = true;
+        packageTarget = takeValue(args, ++index, arg);
+        packageTargetWasExplicit = true;
         break;
       case "--target-triple":
       case "--target-triples":
@@ -967,14 +969,19 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   }
 
   if (!targetTriplesWereExplicit) {
-    targetTriples = defaultTargetTriplesForPlatform(platform);
+    targetTriples = defaultTargetTriplesForPlatform(packageTarget);
   }
   if (targetTriples.length === 0 && !llvmTargetsToBuild) {
-    throw new Error(`unsupported default target platform: ${platform}`);
+    throw new Error(`unsupported default target platform: ${packageTarget}`);
   }
 
-  if (!platformWasExplicit && targetTriples.length === 1) {
-    platform = requiredTargetTriple(requiredArrayItem(targetTriples, 0)).platform;
+  if (!packageTargetWasExplicit && targetTriples.length === 1) {
+    packageTarget = requiredArrayItem(targetTriples, 0);
+  }
+  if (!packageTargetWasExplicit && action === "package" && targetTriples.length > 1) {
+    throw new Error(
+      "package action requires --package-target-triple when multiple target triples are selected",
+    );
   }
 
   return {
@@ -995,7 +1002,7 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     artifactDir,
     packagePrefix,
     packageProfiles,
-    platform,
+    packageTarget,
     targetTriples,
     llvmTargetsToBuild: llvmTargetsToBuild ?? llvmTargetsToBuildForTriples(targetTriples),
     descriptorName,
@@ -1243,16 +1250,18 @@ function inferArtifactMetadata(
 
     const llvmTag = requiredMatch(match, 1);
     const buildType = requiredMatch(match, 2) as BuildType;
-    const platform = requiredMatch(match, 3);
-    const targetTriple = targetTripleForPlatform(platform);
+    const packageTarget = requiredMatch(match, 3);
+    const targetTriple = targetTripleForPackageTarget(packageTarget);
     const targetTripleMetadata = targetTriple ? { targetTriple } : {};
+    const legacyPlatformMetadata =
+      packageTarget !== targetTriple ? { platform: packageTarget } : {};
     if (packageName === "pdb") {
       return {
         package: "pdb",
         type: "debug-symbols",
         llvmTag,
         buildType,
-        platform,
+        ...legacyPlatformMetadata,
         ...targetTripleMetadata,
       };
     }
@@ -1263,7 +1272,7 @@ function inferArtifactMetadata(
       type: "component-package",
       llvmTag,
       buildType,
-      platform,
+      ...legacyPlatformMetadata,
       ...targetTripleMetadata,
       dependsOn: profile.dependsOn,
       components: profile.components,
@@ -1444,7 +1453,9 @@ Options:
   --artifact-dir <path>         Package output directory.
   --package-prefix <name>       Package filename prefix.
   --package-profiles <list>     Package profiles: llvm-core,clang-sdk,clang-tooling,clang-tidy,clang-repl.
-  --platform <name>             Package filename platform segment.
+  --package-target-triple <triple> Package filename target triple segment.
+  --package-target <name>       Legacy package filename target segment.
+  --platform <name>             Legacy alias for --package-target.
   --target-triples <list>       Rust-style target triples used for package targets.
   --llvm-targets-to-build <list> Override LLVM_TARGETS_TO_BUILD directly.
   --descriptor-name <name>      Descriptor filename.

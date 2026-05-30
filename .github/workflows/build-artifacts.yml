@@ -35,15 +35,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            platform: linux-x64
             target_triple: x86_64-unknown-linux-gnu
             build_type: release
           - os: ubuntu-24.04
-            platform: linux-x64
             target_triple: x86_64-unknown-linux-gnu
             build_type: relwithdebinfo
     runs-on: ${{ matrix.os }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
       SCRIPT_C_COMPILER: clang
       SCRIPT_CXX_COMPILER: clang++
@@ -117,7 +115,7 @@ jobs:
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -126,7 +124,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
@@ -144,44 +142,24 @@ jobs:
           - loongarch64-unknown-linux-musl
         build_type: [release, relwithdebinfo]
         include:
-          - platform: linux-x64-musl
-            target_triple: x86_64-unknown-linux-musl
-            cc: x86_64-linux-musl-gcc
-            cxx: x86_64-linux-musl-g++
+          - target_triple: x86_64-unknown-linux-musl
             cmake_system_processor: x86_64
-          - platform: linux-arm64
-            target_triple: aarch64-unknown-linux-gnu
-            cc: aarch64-linux-gnu-gcc
-            cxx: aarch64-linux-gnu-g++
+          - target_triple: aarch64-unknown-linux-gnu
             cmake_system_processor: aarch64
-          - platform: linux-armhf-musl
-            target_triple: arm-unknown-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            cxx: arm-linux-musleabihf-g++
+          - target_triple: arm-unknown-linux-musleabihf
             cmake_system_processor: arm
-          - platform: linux-armv7-musl
-            target_triple: armv7-unknown-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            cxx: arm-linux-musleabihf-g++
+          - target_triple: armv7-unknown-linux-musleabihf
             cmake_system_processor: armv7
-          - platform: linux-riscv64-musl
-            target_triple: riscv64gc-unknown-linux-musl
-            cc: riscv64-linux-musl-gcc
-            cxx: riscv64-linux-musl-g++
+          - target_triple: riscv64gc-unknown-linux-musl
             cmake_system_processor: riscv64
-          - platform: linux-loongarch64-musl
-            target_triple: loongarch64-unknown-linux-musl
-            cc: loongarch64-linux-musl-gcc
-            cxx: loongarch64-linux-musl-g++
+          - target_triple: loongarch64-unknown-linux-musl
             cmake_system_processor: loongarch64
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/cross-rs/${{ matrix.target_triple }}:edge
       options: --user root
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
-      SCRIPT_C_COMPILER: ${{ matrix.cc }}
-      SCRIPT_CXX_COMPILER: ${{ matrix.cxx }}
       SCRIPT_CMAKE_EXTRA_ARGS: >-
         -DCMAKE_SYSTEM_NAME=Linux
         -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_system_processor }}
@@ -199,7 +177,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bash ca-certificates cmake g++ git ninja-build ccache tar xz-utils python3
+            bash ca-certificates clang cmake g++ git lld ninja-build ccache tar xz-utils python3
 
       - uses: actions/checkout@v4
 
@@ -230,6 +208,149 @@ jobs:
             -DLLVM_INCLUDE_TESTS=OFF \
             -DLLVM_TARGETS_TO_BUILD=Native
           cmake --build llvm-native-tools --target llvm-tblgen clang-tblgen mlir-tblgen --parallel "$(nproc)"
+
+      - name: Resolve cross compilers
+        shell: bash
+        run: |
+          target="${{ matrix.target_triple }}"
+          target_env="$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')"
+          target_env_lower="$(printf '%s' "$target" | tr '-' '_')"
+
+          resolve_tool() {
+            local tool="$1"
+            if [[ -z "$tool" ]]; then
+              return 1
+            fi
+
+            if [[ "$tool" == */* ]]; then
+              if [[ ! -x "$tool" ]]; then
+                return 1
+              fi
+              readlink -f "$tool" 2>/dev/null || realpath "$tool" 2>/dev/null || printf '%s\n' "$tool"
+              return 0
+            fi
+
+            command -v "$tool"
+          }
+
+          selected_c=""
+          selected_cxx=""
+          selected_needs_target="0"
+
+          try_pair() {
+            local c="$1"
+            local cxx="$2"
+            local needs_target="${3:-0}"
+            local c_path=""
+            local cxx_path=""
+
+            c_path="$(resolve_tool "$c")" || return 1
+            cxx_path="$(resolve_tool "$cxx")" || return 1
+
+            selected_c="$c_path"
+            selected_cxx="$cxx_path"
+            selected_needs_target="$needs_target"
+            return 0
+          }
+
+          try_linker_pair() {
+            local linker="$1"
+            if [[ -z "$linker" ]]; then
+              return 1
+            fi
+
+            if [[ "$linker" == *gcc ]]; then
+              try_pair "$linker" "${linker%gcc}g++" 0
+              return $?
+            fi
+
+            if [[ "$linker" == *cc ]]; then
+              try_pair "$linker" "${linker%cc}c++" 0
+              return $?
+            fi
+
+            if [[ "$linker" == *clang ]]; then
+              try_pair "$linker" "${linker}++" 1
+              return $?
+            fi
+
+            return 1
+          }
+
+          try_env_pair() {
+            local cc_var="$1"
+            local cxx_var="$2"
+            local cc_value="${!cc_var:-}"
+            local cxx_value="${!cxx_var:-}"
+
+            if [[ -z "$cc_value" || -z "$cxx_value" ]]; then
+              return 1
+            fi
+
+            try_pair "$cc_value" "$cxx_value" 0
+          }
+
+          try_known_pairs() {
+            case "$target" in
+              x86_64-unknown-linux-musl)
+                try_pair x86_64-linux-musl-gcc x86_64-linux-musl-g++ 0 && return 0
+                try_pair x86_64-unknown-linux-musl-gcc x86_64-unknown-linux-musl-g++ 0 && return 0
+                ;;
+              aarch64-unknown-linux-gnu)
+                try_pair aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ 0 && return 0
+                try_pair aarch64-unknown-linux-gnu-gcc aarch64-unknown-linux-gnu-g++ 0 && return 0
+                ;;
+              arm-unknown-linux-musleabihf)
+                try_pair arm-linux-musleabihf-gcc arm-linux-musleabihf-g++ 0 && return 0
+                try_pair arm-unknown-linux-musleabihf-gcc arm-unknown-linux-musleabihf-g++ 0 && return 0
+                ;;
+              armv7-unknown-linux-musleabihf)
+                try_pair arm-linux-musleabihf-gcc arm-linux-musleabihf-g++ 0 && return 0
+                try_pair armv7-linux-musleabihf-gcc armv7-linux-musleabihf-g++ 0 && return 0
+                try_pair armv7-unknown-linux-musleabihf-gcc armv7-unknown-linux-musleabihf-g++ 0 && return 0
+                ;;
+              riscv64gc-unknown-linux-musl)
+                try_pair riscv64gc-unknown-linux-musl-gcc riscv64gc-unknown-linux-musl-g++ 0 && return 0
+                try_pair riscv64-unknown-linux-musl-gcc riscv64-unknown-linux-musl-g++ 0 && return 0
+                try_pair riscv64-linux-musl-gcc riscv64-linux-musl-g++ 0 && return 0
+                ;;
+              loongarch64-unknown-linux-musl)
+                try_pair loongarch64-unknown-linux-musl-gcc loongarch64-unknown-linux-musl-g++ 0 && return 0
+                try_pair loongarch64-linux-musl-gcc loongarch64-linux-musl-g++ 0 && return 0
+                ;;
+            esac
+
+            return 1
+          }
+
+          cargo_linker_var="CARGO_TARGET_${target_env}_LINKER"
+
+          try_env_pair "CC_${target_env}" "CXX_${target_env}" ||
+            try_env_pair "CC_${target_env_lower}" "CXX_${target_env_lower}" ||
+            try_linker_pair "${!cargo_linker_var:-}" ||
+            try_known_pairs ||
+            try_pair clang clang++ 1 || {
+              echo "::error::No C/C++ compiler pair found for ${target}"
+              env | sort | grep -E '^(CC|CXX|CARGO_TARGET_.*_LINKER)=' || true
+              exit 1
+            }
+
+          extra_cmake_args="${SCRIPT_CMAKE_EXTRA_ARGS:-}"
+          if [[ "$selected_needs_target" == "1" ]]; then
+            extra_cmake_args="${extra_cmake_args} -DCMAKE_C_COMPILER_TARGET=${target} -DCMAKE_CXX_COMPILER_TARGET=${target} -DCMAKE_ASM_COMPILER_TARGET=${target}"
+          fi
+
+          {
+            echo "SCRIPT_C_COMPILER=${selected_c}"
+            echo "SCRIPT_CXX_COMPILER=${selected_cxx}"
+            echo "SCRIPT_ASM_COMPILER=${selected_c}"
+            echo "SCRIPT_CMAKE_EXTRA_ARGS=${extra_cmake_args}"
+          } >>"${GITHUB_ENV}"
+
+          echo "C compiler: ${selected_c}"
+          echo "CXX compiler: ${selected_cxx}"
+          echo "ASM compiler: ${selected_c}"
+          echo "extra CMake args: ${extra_cmake_args}"
 
       - name: Reset ccache stats
         run: ccache --zero-stats
@@ -265,7 +386,7 @@ jobs:
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -274,7 +395,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
@@ -289,13 +410,11 @@ jobs:
         build_type: [release, relwithdebinfo]
         include:
           - runner: macos-15-intel
-            platform: darwin-x64
             target_triple: x86_64-apple-darwin
           - runner: macos-15
-            platform: darwin-arm64
             target_triple: aarch64-apple-darwin
     runs-on: ${{ matrix.runner }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
       SCRIPT_C_COMPILER: clang
       SCRIPT_CXX_COMPILER: clang++
@@ -367,7 +486,7 @@ jobs:
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -376,7 +495,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
@@ -391,15 +510,13 @@ jobs:
         build_type: [release, relwithdebinfo]
         include:
           - runner: windows-2022
-            platform: windows-x64
             target_triple: x86_64-pc-windows-msvc
             msvc_arch: x64
           - runner: windows-11-arm
-            platform: windows-arm64
             target_triple: aarch64-pc-windows-msvc
             msvc_arch: arm64
     runs-on: ${{ matrix.runner }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
       SCRIPT_C_COMPILER: cl
       SCRIPT_CXX_COMPILER: cl
@@ -465,12 +582,12 @@ jobs:
             --artifact-dir artifacts `
             --package-prefix llvm-dist `
             --target-triples "${{ matrix.target_triple }}" `
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
