@@ -3,20 +3,16 @@ name: Build LLVM Artifacts
 on:
   workflow_dispatch:
     inputs:
-      llvm_version:
-        description: LLVM x.y.z version to build.
-        default: 21.1.8
+      release_tag:
+        description: Release tag with v prefix (e.g. v21.1.8)
+        default: v21.1.8
         required: true
         type: string
       publish_release:
-        description: Upload artifacts to a GitHub Release.
+        description: Upload artifacts to a GitHub Release
         default: false
         required: true
         type: boolean
-      release_tag:
-        description: Release tag to publish when publish_release is enabled.
-        required: false
-        type: string
   push:
     tags:
       - "v*"
@@ -25,11 +21,11 @@ permissions:
   contents: write
 
 concurrency:
-  group: llvm-artifacts-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.llvm_version || '21.1.8' }}
+  group: llvm-artifacts-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
   cancel-in-progress: false
 
 env:
-  LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21.1.8' }}
+  LLVM_VERSION: ${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
   CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
   SCRIPT_C_COMPILER: clang
   SCRIPT_CXX_COMPILER: clang++
@@ -47,7 +43,7 @@ jobs:
             platform: linux-x64
             build_type: relwithdebinfo
     runs-on: ${{ matrix.os }}
-    name: llvm-${{ env.LLVM_VERSION }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
 
     steps:
       - uses: actions/checkout@v4
@@ -80,9 +76,9 @@ jobs:
 
       - name: Fetch LLVM source
         run: |
-          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
-          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION}:refs/tags/llvmorg-${LLVM_VERSION}"
-          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION}"
+          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
+          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
 
       - name: Reset ccache stats
         run: ccache --zero-stats
@@ -91,7 +87,7 @@ jobs:
         run: |
           pnpm llvm init \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION}" \
+            --allow "${LLVM_VERSION#v}" \
             --build-types "${{ matrix.build_type }}" \
             --ccache \
             --ccache-dir "${CCACHE_DIR}" \
@@ -101,7 +97,7 @@ jobs:
         run: |
           pnpm llvm install \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION}" \
+            --allow "${LLVM_VERSION#v}" \
             --build-types "${{ matrix.build_type }}" \
             --ccache \
             --ccache-dir "${CCACHE_DIR}" \
@@ -111,7 +107,7 @@ jobs:
         run: |
           pnpm llvm package \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION}" \
+            --allow "${LLVM_VERSION#v}" \
             --build-types "${{ matrix.build_type }}" \
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
@@ -124,7 +120,7 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ env.LLVM_VERSION }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
@@ -164,7 +160,7 @@ jobs:
       - name: Upload descriptor
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ env.LLVM_VERSION }}-descriptor
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-descriptor
           path: |
             artifacts/descriptor.json
             artifacts/descriptor.json.sha256
@@ -173,7 +169,7 @@ jobs:
           retention-days: 14
 
       - name: Publish GitHub release artifacts
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && github.event.inputs.release_tag != '') }}
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
