@@ -4,6 +4,8 @@ import * as path from "node:path";
 import {
   BUILD_TYPE_TO_CMAKE,
   CLICE_LLVM_COMPONENTS,
+  DEFAULT_TARGET_TRIPLES,
+  DEFAULT_LLVM_TARGETS_TO_BUILD,
   DEFAULT_PACKAGE_PROFILES,
   EXTRA_LLVM_COMPONENTS,
   LLVM_DISTRIBUTION_COMPONENTS,
@@ -11,7 +13,12 @@ import {
   buildCMakeDistributionComponents,
   createArtifactDescriptor,
   createBuildPlan,
+  defaultTargetTriplesForPlatform,
+  experimentalLlvmTargetsToBuildForVersion,
+  targetTripleForPlatform,
+  llvmTargetsToBuildForTriples,
   parseVersionTag,
+  stableLlvmTargetsToBuildForVersion,
   tagSuffixToPathSuffix,
 } from "../src/build-llvm-toolchains.js";
 
@@ -123,10 +130,84 @@ describe("distribution components", () => {
     expect(new Set(LLVM_DISTRIBUTION_COMPONENTS).size).toBe(LLVM_DISTRIBUTION_COMPONENTS.length);
   });
 
+  it("includes the static-library export closure required by LLVM 21", () => {
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "llvm-core")?.components,
+    ).toEqual(expect.arrayContaining(["LLVMDemangle", "LLVMCore", "LLVMMCParser", "LLVMObject"]));
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "clang-sdk")?.components,
+    ).toEqual(expect.arrayContaining(["clangAPINotes", "clangSupport"]));
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "clang-tooling")?.components,
+    ).toContain("clangRewrite");
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "clang-tidy")?.components,
+    ).toEqual(
+      expect.arrayContaining([
+        "clangAnalysisFlowSensitive",
+        "clangIncludeCleaner",
+        "clangStaticAnalyzerCore",
+        "clangStaticAnalyzerFrontend",
+        "clangTransformer",
+      ]),
+    );
+  });
+
   it("formats distribution components for CMake", () => {
     const cmakeValue = buildCMakeDistributionComponents();
     expect(cmakeValue).toContain("LLVMSupport;LLVMFrontendOpenMP");
     expect(cmakeValue.endsWith(";clang-repl")).toBe(true);
+  });
+});
+
+describe("target triples", () => {
+  it("tracks target triples and derives LLVM backend names", () => {
+    expect(DEFAULT_TARGET_TRIPLES.map((target) => target.triple)).toEqual([
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-unknown-linux-musl",
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "aarch64-pc-windows-msvc",
+      "aarch64-unknown-linux-gnu",
+      "arm-unknown-linux-musleabihf",
+      "armv7-unknown-linux-musleabihf",
+      "riscv64gc-unknown-linux-musl",
+      "loongarch64-unknown-linux-musl",
+    ]);
+    expect(DEFAULT_LLVM_TARGETS_TO_BUILD).toEqual(["X86", "AArch64", "ARM", "RISCV", "LoongArch"]);
+    expect(
+      llvmTargetsToBuildForTriples([
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "armv7-unknown-linux-musleabihf",
+      ]),
+    ).toEqual(["X86", "AArch64", "ARM"]);
+  });
+
+  it("infers triples from package platform aliases", () => {
+    expect(targetTripleForPlatform("linux-x64")).toBe("x86_64-unknown-linux-gnu");
+    expect(targetTripleForPlatform("win32-arm64")).toBe("aarch64-pc-windows-msvc");
+    expect(targetTripleForPlatform("x86_64-unknown-linux-musl")).toBe("x86_64-unknown-linux-musl");
+    expect(defaultTargetTriplesForPlatform("linux-x64")).toEqual(["x86_64-unknown-linux-gnu"]);
+  });
+
+  it("keeps LoongArch experimental for LLVM 15 builds", () => {
+    expect(stableLlvmTargetsToBuildForVersion(DEFAULT_LLVM_TARGETS_TO_BUILD, [15, 0, 7])).toEqual([
+      "X86",
+      "AArch64",
+      "ARM",
+      "RISCV",
+    ]);
+    expect(
+      experimentalLlvmTargetsToBuildForVersion(DEFAULT_LLVM_TARGETS_TO_BUILD, [15, 0, 7]),
+    ).toEqual(["LoongArch"]);
+    expect(stableLlvmTargetsToBuildForVersion(DEFAULT_LLVM_TARGETS_TO_BUILD, [21, 1, 8])).toEqual(
+      DEFAULT_LLVM_TARGETS_TO_BUILD,
+    );
+    expect(
+      experimentalLlvmTargetsToBuildForVersion(DEFAULT_LLVM_TARGETS_TO_BUILD, [21, 1, 8]),
+    ).toEqual([]);
   });
 });
 
@@ -174,6 +255,7 @@ describe("artifact descriptor", () => {
         llvmTag: "llvmorg-21.1.8",
         buildType: "release",
         platform: "linux-x64",
+        targetTriple: "x86_64-unknown-linux-gnu",
         dependsOn: [],
       });
       expect(descriptor.artifacts[0]?.components).toContain("LLVMSupport");
@@ -183,6 +265,7 @@ describe("artifact descriptor", () => {
         llvmTag: "llvmorg-21.1.8",
         buildType: "relwithdebinfo",
         platform: "windows-x64",
+        targetTriple: "x86_64-pc-windows-msvc",
       });
     } finally {
       await rm(tempDir, { recursive: true, force: true });

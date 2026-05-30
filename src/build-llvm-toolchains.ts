@@ -11,12 +11,19 @@ import { pathToFileURL } from "node:url";
 
 export type VersionTuple = readonly [major: number, minor: number, patch: number];
 export type BuildType = "release" | "relwithdebinfo";
+export type LlvmTargetName = "AArch64" | "ARM" | "LoongArch" | "RISCV" | "X86";
 export type PackageProfileName =
   | "llvm-core"
   | "clang-sdk"
   | "clang-tooling"
   | "clang-tidy"
   | "clang-repl";
+
+export interface TargetTripleDefinition {
+  readonly triple: string;
+  readonly llvmTarget: LlvmTargetName;
+  readonly platform: string;
+}
 
 export interface PackageProfile {
   readonly name: PackageProfileName;
@@ -34,6 +41,7 @@ export interface ArtifactDescriptorEntry {
   readonly llvmTag?: string | undefined;
   readonly buildType?: BuildType | undefined;
   readonly platform?: string | undefined;
+  readonly targetTriple?: string | undefined;
   readonly dependsOn?: readonly PackageProfileName[] | undefined;
   readonly components?: readonly string[] | undefined;
 }
@@ -107,6 +115,8 @@ interface CliOptions {
   readonly packagePrefix: string;
   readonly packageProfiles: readonly PackageProfileName[];
   readonly platform: string;
+  readonly targetTriples: readonly string[];
+  readonly llvmTargetsToBuild: readonly string[];
   readonly descriptorName: string;
 }
 
@@ -121,6 +131,86 @@ export const DEFAULT_BUILD_TYPES = [
   "release",
   "relwithdebinfo",
 ] as const satisfies readonly BuildType[];
+
+// Target triples for LLVM distribution packages.
+export const DEFAULT_TARGET_TRIPLES = [
+  {
+    triple: "x86_64-pc-windows-msvc",
+    llvmTarget: "X86",
+    platform: "windows-x64",
+  },
+  {
+    triple: "x86_64-unknown-linux-gnu",
+    llvmTarget: "X86",
+    platform: "linux-x64",
+  },
+  {
+    triple: "x86_64-unknown-linux-musl",
+    llvmTarget: "X86",
+    platform: "linux-x64-musl",
+  },
+  {
+    triple: "x86_64-apple-darwin",
+    llvmTarget: "X86",
+    platform: "darwin-x64",
+  },
+  {
+    triple: "aarch64-apple-darwin",
+    llvmTarget: "AArch64",
+    platform: "darwin-arm64",
+  },
+  {
+    triple: "aarch64-pc-windows-msvc",
+    llvmTarget: "AArch64",
+    platform: "windows-arm64",
+  },
+  {
+    triple: "aarch64-unknown-linux-gnu",
+    llvmTarget: "AArch64",
+    platform: "linux-arm64",
+  },
+  {
+    triple: "arm-unknown-linux-musleabihf",
+    llvmTarget: "ARM",
+    platform: "linux-armhf-musl",
+  },
+  {
+    triple: "armv7-unknown-linux-musleabihf",
+    llvmTarget: "ARM",
+    platform: "linux-armv7-musl",
+  },
+  {
+    triple: "riscv64gc-unknown-linux-musl",
+    llvmTarget: "RISCV",
+    platform: "linux-riscv64-musl",
+  },
+  {
+    triple: "loongarch64-unknown-linux-musl",
+    llvmTarget: "LoongArch",
+    platform: "linux-loongarch64-musl",
+  },
+] as const satisfies readonly TargetTripleDefinition[];
+
+const TARGET_TRIPLE_BY_NAME: ReadonlyMap<string, TargetTripleDefinition> = new Map(
+  DEFAULT_TARGET_TRIPLES.map((definition) => [definition.triple, definition]),
+);
+
+const TARGET_TRIPLE_BY_PLATFORM: ReadonlyMap<string, TargetTripleDefinition> = new Map(
+  DEFAULT_TARGET_TRIPLES.map((definition) => [definition.platform, definition]),
+);
+
+const TARGET_TRIPLE_BY_PLATFORM_ALIAS: ReadonlyMap<string, string> = new Map([
+  ["win32-x64", "x86_64-pc-windows-msvc"],
+  ["win32-arm64", "aarch64-pc-windows-msvc"],
+]);
+
+export const DEFAULT_LLVM_TARGETS_TO_BUILD = llvmTargetsToBuildForTriples(
+  DEFAULT_TARGET_TRIPLES.map((target) => target.triple),
+);
+
+const LLVM_TARGET_EXPERIMENTAL_UNTIL_MAJOR: Partial<Record<LlvmTargetName, number>> = {
+  LoongArch: 15,
+};
 
 export const BUILD_TYPE_TO_CMAKE = {
   release: "Release",
@@ -137,6 +227,38 @@ export const LLVM_PACKAGE_PROFILES = [
       "LLVMFrontendOpenMP",
       "LLVMOption",
       "LLVMTargetParser",
+      "LLVMDemangle",
+      "LLVMCore",
+      "LLVMTransformUtils",
+      "LLVMAnalysis",
+      "LLVMMC",
+      "LLVMMCParser",
+      "LLVMScalarOpts",
+      "LLVMBitReader",
+      "LLVMFrontendOffloading",
+      "LLVMFrontendAtomic",
+      "LLVMFrontendDirective",
+      "LLVMBinaryFormat",
+      "LLVMFrontendHLSL",
+      "LLVMObject",
+      "LLVMProfileData",
+      "LLVMWindowsDriver",
+      "LLVMBitstreamReader",
+      "LLVMRemarks",
+      "LLVMAggressiveInstCombine",
+      "LLVMInstCombine",
+      "LLVMObjectYAML",
+      "LLVMIRReader",
+      "LLVMTextAPI",
+      "LLVMSymbolize",
+      "LLVMDebugInfoDWARF",
+      "LLVMDebugInfoDWARFLowLevel",
+      "LLVMDebugInfoCodeView",
+      "LLVMAsmParser",
+      "LLVMDebugInfoGSYM",
+      "LLVMDebugInfoPDB",
+      "LLVMDebugInfoBTF",
+      "LLVMDebugInfoMSF",
     ],
   },
   {
@@ -145,6 +267,7 @@ export const LLVM_PACKAGE_PROFILES = [
     components: [
       "clang-headers",
       "clang-resource-headers",
+      "clangAPINotes",
       "clangAnalysis",
       "clangAST",
       "clangASTMatchers",
@@ -157,6 +280,7 @@ export const LLVM_PACKAGE_PROFILES = [
       "clangParse",
       "clangSema",
       "clangSerialization",
+      "clangSupport",
     ],
   },
   {
@@ -164,6 +288,7 @@ export const LLVM_PACKAGE_PROFILES = [
     dependsOn: ["llvm-core", "clang-sdk"],
     components: [
       "clangFormat",
+      "clangRewrite",
       "clangTooling",
       "clangToolingCore",
       "clangToolingInclusions",
@@ -176,6 +301,14 @@ export const LLVM_PACKAGE_PROFILES = [
     name: "clang-tidy",
     dependsOn: ["llvm-core", "clang-sdk", "clang-tooling"],
     components: [
+      "clangAnalysisFlowSensitive",
+      "clangAnalysisFlowSensitiveModels",
+      "clangCrossTU",
+      "clangIncludeCleaner",
+      "clangStaticAnalyzerCheckers",
+      "clangStaticAnalyzerCore",
+      "clangStaticAnalyzerFrontend",
+      "clangTransformer",
       "clangTidy",
       "clangTidyAbseilModule",
       "clangTidyAlteraModule",
@@ -327,6 +460,48 @@ export function buildCMakeDistributionComponents(): string {
   return LLVM_DISTRIBUTION_COMPONENTS.join(";");
 }
 
+export function llvmTargetsToBuildForTriples(targetTriples: readonly string[]): readonly string[] {
+  return uniqueStrings(
+    targetTriples.map((targetTriple) => requiredTargetTriple(targetTriple).llvmTarget),
+  );
+}
+
+export function stableLlvmTargetsToBuildForVersion(
+  llvmTargetsToBuild: readonly string[],
+  version: VersionTuple | undefined,
+): readonly string[] {
+  return llvmTargetsToBuild.filter(
+    (llvmTarget) => !isExperimentalLlvmTargetForVersion(llvmTarget, version),
+  );
+}
+
+export function experimentalLlvmTargetsToBuildForVersion(
+  llvmTargetsToBuild: readonly string[],
+  version: VersionTuple | undefined,
+): readonly string[] {
+  return llvmTargetsToBuild.filter((llvmTarget) =>
+    isExperimentalLlvmTargetForVersion(llvmTarget, version),
+  );
+}
+
+export function targetTripleForPlatform(platform: string): string | undefined {
+  if (TARGET_TRIPLE_BY_NAME.has(platform)) {
+    return platform;
+  }
+
+  const directMatch = TARGET_TRIPLE_BY_PLATFORM.get(platform)?.triple;
+  if (directMatch) {
+    return directMatch;
+  }
+
+  return TARGET_TRIPLE_BY_PLATFORM_ALIAS.get(platform);
+}
+
+export function defaultTargetTriplesForPlatform(platform: string): readonly string[] {
+  const targetTriple = targetTripleForPlatform(platform);
+  return targetTriple ? [targetTriple] : [];
+}
+
 async function main(): Promise<void> {
   const options = parseCliOptions(process.argv.slice(2));
 
@@ -342,6 +517,11 @@ async function main(): Promise<void> {
 
   if (options.action === "profiles") {
     console.log(JSON.stringify(LLVM_PACKAGE_PROFILES, null, 2));
+    return;
+  }
+
+  if (options.action === "target-triples" || options.action === "targets") {
+    console.log(JSON.stringify(DEFAULT_TARGET_TRIPLES, null, 2));
     return;
   }
 
@@ -638,6 +818,15 @@ function buildTaskEnv(
   buildType: BuildType,
   options: CliOptions,
 ): NodeJS.ProcessEnv {
+  const llvmTargetsToBuild = stableLlvmTargetsToBuildForVersion(
+    options.llvmTargetsToBuild,
+    task.version,
+  );
+  const experimentalLlvmTargetsToBuild = experimentalLlvmTargetsToBuildForVersion(
+    options.llvmTargetsToBuild,
+    task.version,
+  );
+
   return compactEnv({
     ...process.env,
     CCACHE_BASEDIR: options.ccacheBaseDir,
@@ -651,10 +840,16 @@ function buildTaskEnv(
     SCRIPT_CMAKE_BUILD_TYPE: BUILD_TYPE_TO_CMAKE[buildType],
     SCRIPT_ENABLE_CCACHE: options.ccache ? "1" : "0",
     SCRIPT_LLVM_DISTRIBUTION_COMPONENTS: buildCMakeDistributionComponents(),
+    SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:
+      experimentalLlvmTargetsToBuild.length > 0
+        ? experimentalLlvmTargetsToBuild.join(";")
+        : undefined,
+    SCRIPT_LLVM_TARGETS_TO_BUILD: llvmTargetsToBuild.join(";"),
     SCRIPT_LLVM_TAG: task.llvmTag,
     SCRIPT_PACKAGE_PLATFORM: options.platform,
     SCRIPT_PACKAGE_PREFIX: options.packagePrefix,
     SCRIPT_STD_BUILD_TYPE: buildType,
+    SCRIPT_TARGET_TRIPLES: options.targetTriples.join(","),
     SCRIPT_WORKTREE: task.worktree,
   });
 }
@@ -691,6 +886,10 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   let packagePrefix = "llvm-dist";
   let packageProfiles: readonly PackageProfileName[] = DEFAULT_PACKAGE_PROFILES;
   let platform = `${process.platform}-${process.arch}`;
+  let platformWasExplicit = false;
+  let targetTriples: readonly string[] = defaultTargetTriplesForPlatform(platform);
+  let targetTriplesWereExplicit = false;
+  let llvmTargetsToBuild: readonly string[] | undefined;
   let descriptorName = "descriptor.json";
 
   for (let index = 0; index < args.length; index += 1) {
@@ -749,6 +948,15 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
         break;
       case "--platform":
         platform = takeValue(args, ++index, arg);
+        platformWasExplicit = true;
+        break;
+      case "--target-triple":
+      case "--target-triples":
+        targetTriples = parseTargetTriples(takeValue(args, ++index, arg));
+        targetTriplesWereExplicit = true;
+        break;
+      case "--llvm-targets-to-build":
+        llvmTargetsToBuild = parseLlvmTargetsToBuild(takeValue(args, ++index, arg));
         break;
       case "--descriptor-name":
         descriptorName = takeValue(args, ++index, arg);
@@ -756,6 +964,17 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
       default:
         throw new Error(`unknown option: ${arg}`);
     }
+  }
+
+  if (!targetTriplesWereExplicit) {
+    targetTriples = defaultTargetTriplesForPlatform(platform);
+  }
+  if (targetTriples.length === 0 && !llvmTargetsToBuild) {
+    throw new Error(`unsupported default target platform: ${platform}`);
+  }
+
+  if (!platformWasExplicit && targetTriples.length === 1) {
+    platform = requiredTargetTriple(requiredArrayItem(targetTriples, 0)).platform;
   }
 
   return {
@@ -777,6 +996,8 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     packagePrefix,
     packageProfiles,
     platform,
+    targetTriples,
+    llvmTargetsToBuild: llvmTargetsToBuild ?? llvmTargetsToBuildForTriples(targetTriples),
     descriptorName,
   };
 }
@@ -796,6 +1017,35 @@ function parseBuildTypes(value: string): readonly BuildType[] {
 
 function parsePackageProfiles(value: string): readonly PackageProfileName[] {
   return splitCommaList(value).map((name) => requiredPackageProfile(name).name);
+}
+
+function parseTargetTriples(value: string): readonly string[] {
+  return splitCommaList(value).map((targetTriple) => requiredTargetTriple(targetTriple).triple);
+}
+
+function parseLlvmTargetsToBuild(value: string): readonly string[] {
+  return value
+    .split(/[;,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function requiredTargetTriple(targetTriple: string): TargetTripleDefinition {
+  const definition = TARGET_TRIPLE_BY_NAME.get(targetTriple);
+  if (!definition) {
+    throw new Error(`unsupported target triple: ${targetTriple}`);
+  }
+  return definition;
+}
+
+function isExperimentalLlvmTargetForVersion(
+  llvmTarget: string,
+  version: VersionTuple | undefined,
+): boolean {
+  const experimentalUntilMajor = LLVM_TARGET_EXPERIMENTAL_UNTIL_MAJOR[llvmTarget as LlvmTargetName];
+  return version !== undefined && experimentalUntilMajor !== undefined
+    ? version[0] <= experimentalUntilMajor
+    : false;
 }
 
 function requiredPackageProfile(name: string): PackageProfile {
@@ -994,6 +1244,8 @@ function inferArtifactMetadata(
     const llvmTag = requiredMatch(match, 1);
     const buildType = requiredMatch(match, 2) as BuildType;
     const platform = requiredMatch(match, 3);
+    const targetTriple = targetTripleForPlatform(platform);
+    const targetTripleMetadata = targetTriple ? { targetTriple } : {};
     if (packageName === "pdb") {
       return {
         package: "pdb",
@@ -1001,6 +1253,7 @@ function inferArtifactMetadata(
         llvmTag,
         buildType,
         platform,
+        ...targetTripleMetadata,
       };
     }
 
@@ -1011,6 +1264,7 @@ function inferArtifactMetadata(
       llvmTag,
       buildType,
       platform,
+      ...targetTripleMetadata,
       dependsOn: profile.dependsOn,
       components: profile.components,
     };
@@ -1169,6 +1423,7 @@ Actions:
   plan          Print the discovered LLVM worktree plan as JSON.
   components    Print LLVM_DISTRIBUTION_COMPONENTS.
   profiles      Print package profile definitions.
+  targets       Print default target triple definitions.
   descriptor    Generate descriptor.json and .sha256 files for artifacts.
   init          Configure each selected build directory.
   build         Run ninja for each selected build directory.
@@ -1190,6 +1445,8 @@ Options:
   --package-prefix <name>       Package filename prefix.
   --package-profiles <list>     Package profiles: llvm-core,clang-sdk,clang-tooling,clang-tidy,clang-repl.
   --platform <name>             Package filename platform segment.
+  --target-triples <list>       Rust-style target triples used for package targets.
+  --llvm-targets-to-build <list> Override LLVM_TARGETS_TO_BUILD directly.
   --descriptor-name <name>      Descriptor filename.
   --dry-run                     Print commands without executing them.
 `);

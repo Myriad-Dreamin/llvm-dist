@@ -27,23 +27,26 @@ concurrency:
 env:
   LLVM_VERSION: ${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
   CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
-  SCRIPT_C_COMPILER: clang
-  SCRIPT_CXX_COMPILER: clang++
 
 jobs:
-  build:
+  build-linux-native:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             platform: linux-x64
+            target_triple: x86_64-unknown-linux-gnu
             build_type: release
           - os: ubuntu-24.04
             platform: linux-x64
+            target_triple: x86_64-unknown-linux-gnu
             build_type: relwithdebinfo
     runs-on: ${{ matrix.os }}
     name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    env:
+      SCRIPT_C_COMPILER: clang
+      SCRIPT_CXX_COMPILER: clang++
 
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +92,7 @@ jobs:
             --llvm-dir llvm-mainline \
             --allow "${LLVM_VERSION#v}" \
             --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
             --ccache \
             --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
@@ -99,6 +103,7 @@ jobs:
             --llvm-dir llvm-mainline \
             --allow "${LLVM_VERSION#v}" \
             --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
             --ccache \
             --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
@@ -111,6 +116,7 @@ jobs:
             --build-types "${{ matrix.build_type }}" \
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
+            --target-triples "${{ matrix.target_triple }}" \
             --platform "${{ matrix.platform }}"
 
       - name: Show ccache stats
@@ -125,8 +131,356 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-linux-cross:
+    strategy:
+      fail-fast: false
+      matrix:
+        target_triple:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - arm-unknown-linux-musleabihf
+          - armv7-unknown-linux-musleabihf
+          - riscv64gc-unknown-linux-musl
+          - loongarch64-unknown-linux-musl
+        build_type: [release, relwithdebinfo]
+        include:
+          - platform: linux-x64-musl
+            target_triple: x86_64-unknown-linux-musl
+            cc: x86_64-linux-musl-gcc
+            cxx: x86_64-linux-musl-g++
+            cmake_system_processor: x86_64
+          - platform: linux-arm64
+            target_triple: aarch64-unknown-linux-gnu
+            cc: aarch64-linux-gnu-gcc
+            cxx: aarch64-linux-gnu-g++
+            cmake_system_processor: aarch64
+          - platform: linux-armhf-musl
+            target_triple: arm-unknown-linux-musleabihf
+            cc: arm-linux-musleabihf-gcc
+            cxx: arm-linux-musleabihf-g++
+            cmake_system_processor: arm
+          - platform: linux-armv7-musl
+            target_triple: armv7-unknown-linux-musleabihf
+            cc: arm-linux-musleabihf-gcc
+            cxx: arm-linux-musleabihf-g++
+            cmake_system_processor: armv7
+          - platform: linux-riscv64-musl
+            target_triple: riscv64gc-unknown-linux-musl
+            cc: riscv64-linux-musl-gcc
+            cxx: riscv64-linux-musl-g++
+            cmake_system_processor: riscv64
+          - platform: linux-loongarch64-musl
+            target_triple: loongarch64-unknown-linux-musl
+            cc: loongarch64-linux-musl-gcc
+            cxx: loongarch64-linux-musl-g++
+            cmake_system_processor: loongarch64
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/cross-rs/${{ matrix.target_triple }}:edge
+      options: --user root
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    env:
+      SCRIPT_C_COMPILER: ${{ matrix.cc }}
+      SCRIPT_CXX_COMPILER: ${{ matrix.cxx }}
+      SCRIPT_CMAKE_EXTRA_ARGS: >-
+        -DCMAKE_SYSTEM_NAME=Linux
+        -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_system_processor }}
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+        -DLLVM_HOST_TRIPLE=${{ matrix.target_triple }}
+        -DLLVM_DEFAULT_TARGET_TRIPLE=${{ matrix.target_triple }}
+        -DLLVM_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/llvm-tblgen
+        -DCLANG_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/clang-tblgen
+        -DMLIR_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/mlir-tblgen
+        -DLLVM_ENABLE_ZLIB=OFF
+        -DLLVM_ENABLE_ZSTD=OFF
+
+    steps:
+      - name: Install container dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bash ca-certificates cmake g++ git ninja-build ccache tar xz-utils python3
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch LLVM source
+        run: |
+          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
+          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+
+      - name: Build native tablegen tools
+        run: |
+          cmake -S llvm-mainline/llvm -B llvm-native-tools -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DLLVM_ENABLE_PROJECTS="clang;mlir" \
+            -DLLVM_INCLUDE_EXAMPLES=OFF \
+            -DLLVM_INCLUDE_TESTS=OFF \
+            -DLLVM_TARGETS_TO_BUILD=Native
+          cmake --build llvm-native-tools --target llvm-tblgen clang-tblgen mlir-tblgen --parallel "$(nproc)"
+
+      - name: Reset ccache stats
+        run: ccache --zero-stats
+
+      - name: Configure LLVM
+        run: |
+          pnpm llvm init \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(nproc)"
+
+      - name: Build and install distribution
+        run: |
+          pnpm llvm install \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(nproc)"
+
+      - name: Package artifact
+        run: |
+          pnpm llvm package \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --artifact-dir artifacts \
+            --package-prefix llvm-dist \
+            --target-triples "${{ matrix.target_triple }}" \
+            --platform "${{ matrix.platform }}"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build-darwin:
+    strategy:
+      fail-fast: false
+      matrix:
+        target_triple:
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+        build_type: [release, relwithdebinfo]
+        include:
+          - runner: macos-15-intel
+            platform: darwin-x64
+            target_triple: x86_64-apple-darwin
+          - runner: macos-15
+            platform: darwin-arm64
+            target_triple: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    env:
+      SCRIPT_C_COMPILER: clang
+      SCRIPT_CXX_COMPILER: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install LLVM build dependencies
+        run: brew install ninja ccache xz zstd
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
+            ccache-${{ runner.os }}-${{ matrix.build_type }}-
+
+      - name: Fetch LLVM source
+        run: |
+          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
+          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+
+      - name: Reset ccache stats
+        run: ccache --zero-stats
+
+      - name: Configure LLVM
+        run: |
+          pnpm llvm init \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(sysctl -n hw.ncpu)"
+
+      - name: Build and install distribution
+        run: |
+          pnpm llvm install \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --target-triples "${{ matrix.target_triple }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(sysctl -n hw.ncpu)"
+
+      - name: Package artifact
+        run: |
+          pnpm llvm package \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION#v}" \
+            --build-types "${{ matrix.build_type }}" \
+            --artifact-dir artifacts \
+            --package-prefix llvm-dist \
+            --target-triples "${{ matrix.target_triple }}" \
+            --platform "${{ matrix.platform }}"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        target_triple:
+          - x86_64-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+        build_type: [release, relwithdebinfo]
+        include:
+          - runner: windows-2022
+            platform: windows-x64
+            target_triple: x86_64-pc-windows-msvc
+            msvc_arch: x64
+          - runner: windows-11-arm
+            platform: windows-arm64
+            target_triple: aarch64-pc-windows-msvc
+            msvc_arch: arm64
+    runs-on: ${{ matrix.runner }}
+    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    env:
+      SCRIPT_C_COMPILER: cl
+      SCRIPT_CXX_COMPILER: cl
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Fetch LLVM source
+        shell: bash
+        run: |
+          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
+          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+
+      - name: Configure LLVM
+        shell: pwsh
+        run: |
+          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
+          pnpm llvm init `
+            --llvm-dir llvm-mainline `
+            --allow "$llvmVersion" `
+            --build-types "${{ matrix.build_type }}" `
+            --target-triples "${{ matrix.target_triple }}" `
+            --no-ccache `
+            --jobs "$env:NUMBER_OF_PROCESSORS"
+
+      - name: Build and install distribution
+        shell: pwsh
+        run: |
+          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
+          pnpm llvm install `
+            --llvm-dir llvm-mainline `
+            --allow "$llvmVersion" `
+            --build-types "${{ matrix.build_type }}" `
+            --target-triples "${{ matrix.target_triple }}" `
+            --no-ccache `
+            --jobs "$env:NUMBER_OF_PROCESSORS"
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
+          pnpm llvm package `
+            --llvm-dir llvm-mainline `
+            --allow "$llvmVersion" `
+            --build-types "${{ matrix.build_type }}" `
+            --artifact-dir artifacts `
+            --package-prefix llvm-dist `
+            --target-triples "${{ matrix.target_triple }}" `
+            --platform "${{ matrix.platform }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
   descriptor:
-    needs: build
+    needs:
+      - build-linux-native
+      - build-linux-cross
+      - build-darwin
+      - build-windows
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
