@@ -1,0 +1,24 @@
+{
+  "name": "llvm-dist",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LLVM distribution build orchestration for our releases.",
+  "bin": {
+    "build-llvm-toolchains": "./src/build-llvm-toolchains.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "llvm": "node --import tsx src/build-llvm-toolchains.ts",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "test": "tsc --noEmit && vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "oxfmt": "0.46.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "packageManager": "pnpm@10.16.1"
+}
