@@ -129,6 +129,49 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  descriptor:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: llvm-dist-${{ env.LLVM_VERSION }}-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate descriptor and checksums
+        run: |
+          pnpm llvm descriptor \
+            --artifact-dir artifacts \
+            --package-prefix llvm-dist \
+            --descriptor-name descriptor.json
+
+      - name: Upload descriptor
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-dist-${{ env.LLVM_VERSION }}-descriptor
+          path: |
+            artifacts/descriptor.json
+            artifacts/descriptor.json.sha256
+            artifacts/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish GitHub release artifacts
         if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && github.event.inputs.release_tag != '') }}
         uses: softprops/action-gh-release@v2

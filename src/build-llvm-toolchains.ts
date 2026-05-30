@@ -1,7 +1,9 @@
 #!/usr/bin/env -S node --import tsx
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
+import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,6 +11,40 @@ import { pathToFileURL } from "node:url";
 
 export type VersionTuple = readonly [major: number, minor: number, patch: number];
 export type BuildType = "release" | "relwithdebinfo";
+export type PackageProfileName =
+  | "llvm-core"
+  | "clang-sdk"
+  | "clang-tooling"
+  | "clang-tidy"
+  | "clang-repl";
+
+export interface PackageProfile {
+  readonly name: PackageProfileName;
+  readonly components: readonly string[];
+  readonly dependsOn: readonly PackageProfileName[];
+}
+
+export interface ArtifactDescriptorEntry {
+  readonly name: string;
+  readonly path: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly package?: PackageProfileName | "pdb" | undefined;
+  readonly type?: "component-package" | "debug-symbols" | undefined;
+  readonly llvmTag?: string | undefined;
+  readonly buildType?: BuildType | undefined;
+  readonly platform?: string | undefined;
+  readonly dependsOn?: readonly PackageProfileName[] | undefined;
+  readonly components?: readonly string[] | undefined;
+}
+
+export interface ArtifactDescriptor {
+  readonly schemaVersion: 1;
+  readonly generatedAt: string;
+  readonly packagePrefix: string;
+  readonly artifactCount: number;
+  readonly artifacts: readonly ArtifactDescriptorEntry[];
+}
 
 export interface ParsedVersionTag {
   readonly prefix: string;
@@ -69,7 +105,9 @@ interface CliOptions {
   readonly dryRun: boolean;
   readonly artifactDir: string;
   readonly packagePrefix: string;
+  readonly packageProfiles: readonly PackageProfileName[];
   readonly platform: string;
+  readonly descriptorName: string;
 }
 
 const RELEASE_SUFFIX_MARKER = "-rcN";
@@ -89,59 +127,96 @@ export const BUILD_TYPE_TO_CMAKE = {
   relwithdebinfo: "RelWithDebInfo",
 } as const satisfies Record<BuildType, string>;
 
-export const CLICE_LLVM_COMPONENTS = [
-  "llvm-headers",
-  "clang-headers",
-  "clang-resource-headers",
-  "LLVMSupport",
-  "LLVMFrontendOpenMP",
-  "LLVMOption",
-  "LLVMTargetParser",
-  "clangAnalysis",
-  "clangAST",
-  "clangASTMatchers",
-  "clangBasic",
-  "clangDriver",
-  "clangEdit",
-  "clangFormat",
-  "clangFrontend",
-  "clangIndex",
-  "clangLex",
-  "clangParse",
-  "clangSema",
-  "clangSerialization",
-  "clangTidy",
-  "clangTidyAbseilModule",
-  "clangTidyAlteraModule",
-  "clangTidyAndroidModule",
-  "clangTidyBoostModule",
-  "clangTidyBugproneModule",
-  "clangTidyCERTModule",
-  "clangTidyConcurrencyModule",
-  "clangTidyCppCoreGuidelinesModule",
-  "clangTidyDarwinModule",
-  "clangTidyFuchsiaModule",
-  "clangTidyGoogleModule",
-  "clangTidyHICPPModule",
-  "clangTidyLinuxKernelModule",
-  "clangTidyLLVMModule",
-  "clangTidyLLVMLibcModule",
-  "clangTidyMiscModule",
-  "clangTidyModernizeModule",
-  "clangTidyObjCModule",
-  "clangTidyOpenMPModule",
-  "clangTidyPerformanceModule",
-  "clangTidyPortabilityModule",
-  "clangTidyReadabilityModule",
-  "clangTidyUtils",
-  "clangTidyZirconModule",
-  "clangTooling",
-  "clangToolingCore",
-  "clangToolingInclusions",
-  "clangToolingInclusionsStdlib",
-  "clangToolingRefactoring",
-  "clangToolingSyntax",
-] as const;
+export const LLVM_PACKAGE_PROFILES = [
+  {
+    name: "llvm-core",
+    dependsOn: [],
+    components: [
+      "llvm-headers",
+      "LLVMSupport",
+      "LLVMFrontendOpenMP",
+      "LLVMOption",
+      "LLVMTargetParser",
+    ],
+  },
+  {
+    name: "clang-sdk",
+    dependsOn: ["llvm-core"],
+    components: [
+      "clang-headers",
+      "clang-resource-headers",
+      "clangAnalysis",
+      "clangAST",
+      "clangASTMatchers",
+      "clangBasic",
+      "clangDriver",
+      "clangEdit",
+      "clangFrontend",
+      "clangIndex",
+      "clangLex",
+      "clangParse",
+      "clangSema",
+      "clangSerialization",
+    ],
+  },
+  {
+    name: "clang-tooling",
+    dependsOn: ["llvm-core", "clang-sdk"],
+    components: [
+      "clangFormat",
+      "clangTooling",
+      "clangToolingCore",
+      "clangToolingInclusions",
+      "clangToolingInclusionsStdlib",
+      "clangToolingRefactoring",
+      "clangToolingSyntax",
+    ],
+  },
+  {
+    name: "clang-tidy",
+    dependsOn: ["llvm-core", "clang-sdk", "clang-tooling"],
+    components: [
+      "clangTidy",
+      "clangTidyAbseilModule",
+      "clangTidyAlteraModule",
+      "clangTidyAndroidModule",
+      "clangTidyBoostModule",
+      "clangTidyBugproneModule",
+      "clangTidyCERTModule",
+      "clangTidyConcurrencyModule",
+      "clangTidyCppCoreGuidelinesModule",
+      "clangTidyDarwinModule",
+      "clangTidyFuchsiaModule",
+      "clangTidyGoogleModule",
+      "clangTidyHICPPModule",
+      "clangTidyLinuxKernelModule",
+      "clangTidyLLVMModule",
+      "clangTidyLLVMLibcModule",
+      "clangTidyMiscModule",
+      "clangTidyModernizeModule",
+      "clangTidyObjCModule",
+      "clangTidyOpenMPModule",
+      "clangTidyPerformanceModule",
+      "clangTidyPortabilityModule",
+      "clangTidyReadabilityModule",
+      "clangTidyUtils",
+      "clangTidyZirconModule",
+    ],
+  },
+  {
+    name: "clang-repl",
+    dependsOn: ["llvm-core", "clang-sdk"],
+    components: ["clang-repl"],
+  },
+] as const satisfies readonly PackageProfile[];
+
+export const DEFAULT_PACKAGE_PROFILES = LLVM_PACKAGE_PROFILES.map((profile) => profile.name);
+
+export const CLICE_LLVM_COMPONENTS = uniqueStrings(
+  LLVM_PACKAGE_PROFILES.filter((profile) => profile.name !== "clang-repl").flatMap(
+    (profile) => profile.components,
+  ),
+);
 
 export const EXTRA_LLVM_COMPONENTS = ["clang-repl"] as const;
 
@@ -149,6 +224,12 @@ export const LLVM_DISTRIBUTION_COMPONENTS = uniqueStrings([
   ...CLICE_LLVM_COMPONENTS,
   ...EXTRA_LLVM_COMPONENTS,
 ]);
+
+const PACKAGE_PROFILE_BY_NAME = new Map(
+  LLVM_PACKAGE_PROFILES.map((profile) => [profile.name, profile]),
+);
+
+const DESCRIPTOR_ARTIFACT_EXTENSIONS = [".tar.xz", ".tar.gz", ".tgz", ".tar.zst", ".zip"] as const;
 
 export function parseVersionTag(prefix: string, value: string): ParsedVersionTag | undefined {
   const regexp = new RegExp(`^${escapeRegExp(prefix)}-(\\d+)\\.(\\d+)\\.(\\d+)(-[A-Za-z0-9_]+)?$`);
@@ -259,6 +340,22 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (options.action === "profiles") {
+    console.log(JSON.stringify(LLVM_PACKAGE_PROFILES, null, 2));
+    return;
+  }
+
+  if (options.action === "descriptor") {
+    const descriptor = await writeArtifactDescriptor(options);
+    console.log(
+      `wrote ${descriptor.artifactCount} artifact entries to ${path.join(
+        options.artifactDir,
+        options.descriptorName,
+      )}`,
+    );
+    return;
+  }
+
   const plan = await loadBuildPlan(options);
   if (options.action === "plan") {
     console.log(JSON.stringify(plan, null, 2));
@@ -285,6 +382,11 @@ async function loadBuildPlan(options: CliOptions): Promise<BuildPlan> {
 }
 
 async function runBuildPlan(plan: BuildPlan, options: CliOptions): Promise<void> {
+  if (options.action === "package") {
+    await runPackagePlan(plan, options);
+    return;
+  }
+
   await setupCcache(options);
 
   for (const task of plan.tasks) {
@@ -308,6 +410,162 @@ async function runBuildPlan(plan: BuildPlan, options: CliOptions): Promise<void>
       await runTaskScript(task, buildType, options);
     }
   }
+}
+
+async function runPackagePlan(plan: BuildPlan, options: CliOptions): Promise<void> {
+  for (const task of plan.tasks) {
+    await ensureWorktree(task, options);
+    for (const buildType of task.buildTypes) {
+      await packageBuild(task, buildType, options);
+    }
+  }
+}
+
+async function packageBuild(
+  task: BuildTask,
+  buildType: BuildType,
+  options: CliOptions,
+): Promise<void> {
+  const buildDir = path.join(
+    options.llvmDir,
+    task.worktree,
+    "build",
+    BUILD_TYPE_TO_CMAKE[buildType],
+  );
+  const stagingRoot = path.join(buildDir, ".llvm-dist-packages");
+  const pdbStagingDir = path.join(stagingRoot, "pdb");
+  const selectedProfiles = options.packageProfiles.map(requiredPackageProfile);
+
+  await assertFileReadable(path.join(buildDir, "CMakeCache.txt"));
+  await fs.mkdir(options.artifactDir, { recursive: true });
+  await fs.rm(stagingRoot, { recursive: true, force: true });
+  await fs.mkdir(pdbStagingDir, { recursive: true });
+
+  console.log(
+    [
+      "===========",
+      "package",
+      task.llvmTag,
+      buildType,
+      task.worktree,
+      "=====================",
+    ].join(" "),
+  );
+
+  for (const profile of selectedProfiles) {
+    const profileStagingDir = path.join(stagingRoot, profile.name);
+    await fs.mkdir(profileStagingDir, { recursive: true });
+
+    for (const component of profile.components) {
+      await runCommand(
+        "cmake",
+        ["--install", ".", "--component", component, "--prefix", profileStagingDir],
+        {
+          cwd: buildDir,
+          dryRun: options.dryRun,
+          env: buildTaskEnv(task, buildType, options),
+        },
+      );
+    }
+
+    await movePdbFiles(profileStagingDir, pdbStagingDir);
+    await createPackageArchive(profileStagingDir, profile.name, task, buildType, options);
+  }
+
+  if (await hasAnyFile(pdbStagingDir)) {
+    await createPackageArchive(pdbStagingDir, "pdb", task, buildType, options);
+  } else {
+    console.log(`skip pdb package for ${task.llvmTag} ${buildType}: no .pdb files`);
+  }
+}
+
+async function createPackageArchive(
+  stagingDir: string,
+  packageName: PackageProfileName | "pdb",
+  task: BuildTask,
+  buildType: BuildType,
+  options: CliOptions,
+): Promise<void> {
+  if (options.dryRun) {
+    console.log(`[dry-run] package ${packageName} from ${stagingDir}`);
+    return;
+  }
+
+  if (!(await hasAnyFile(stagingDir))) {
+    throw new Error(`package ${packageName} did not install any files: ${stagingDir}`);
+  }
+
+  const archivePath = path.join(
+    options.artifactDir,
+    `${options.packagePrefix}-${packageName}-${task.llvmTag}-${buildType}-${options.platform}.tar.xz`,
+  );
+
+  await fs.rm(archivePath, { force: true });
+  await runCommand("tar", ["-C", stagingDir, "-cJf", archivePath, "."], {
+    dryRun: options.dryRun,
+  });
+  await writeSha256File(archivePath);
+}
+
+export async function createArtifactDescriptor(
+  artifactDir: string,
+  options: {
+    readonly packagePrefix: string;
+    readonly descriptorName?: string;
+    readonly generatedAt?: string;
+  },
+): Promise<ArtifactDescriptor> {
+  const descriptorName = options.descriptorName ?? "descriptor.json";
+  const artifactPaths = (await walkFiles(artifactDir)).filter((artifactPath) =>
+    shouldIncludeInDescriptor(artifactPath, descriptorName),
+  );
+
+  const artifacts = await Promise.all(
+    artifactPaths.map(async (artifactPath): Promise<ArtifactDescriptorEntry> => {
+      const [stats, sha256] = await Promise.all([fs.stat(artifactPath), sha256File(artifactPath)]);
+      return {
+        ...inferArtifactMetadata(path.basename(artifactPath), options.packagePrefix),
+        name: path.basename(artifactPath),
+        path: toPosixPath(path.relative(artifactDir, artifactPath)),
+        size: stats.size,
+        sha256,
+      };
+    }),
+  );
+
+  artifacts.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    schemaVersion: 1,
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    packagePrefix: options.packagePrefix,
+    artifactCount: artifacts.length,
+    artifacts,
+  };
+}
+
+async function writeArtifactDescriptor(options: CliOptions): Promise<ArtifactDescriptor> {
+  await fs.mkdir(options.artifactDir, { recursive: true });
+
+  const artifactPaths = (await walkFiles(options.artifactDir)).filter((artifactPath) =>
+    shouldIncludeInDescriptor(artifactPath, options.descriptorName),
+  );
+  if (artifactPaths.length === 0) {
+    throw new Error(`no artifacts found in ${options.artifactDir}`);
+  }
+
+  for (const artifactPath of artifactPaths) {
+    await writeSha256File(artifactPath);
+  }
+
+  const descriptor = await createArtifactDescriptor(options.artifactDir, {
+    packagePrefix: options.packagePrefix,
+    descriptorName: options.descriptorName,
+  });
+  const descriptorPath = path.join(options.artifactDir, options.descriptorName);
+  await fs.writeFile(`${descriptorPath}.tmp`, `${JSON.stringify(descriptor, null, 2)}\n`);
+  await fs.rename(`${descriptorPath}.tmp`, descriptorPath);
+  await writeSha256File(descriptorPath);
+  return descriptor;
 }
 
 async function ensureWorktree(task: BuildTask, options: CliOptions): Promise<void> {
@@ -431,7 +689,9 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   let dryRun = false;
   let artifactDir = path.resolve("artifacts");
   let packagePrefix = "llvm-dist";
+  let packageProfiles: readonly PackageProfileName[] = DEFAULT_PACKAGE_PROFILES;
   let platform = `${process.platform}-${process.arch}`;
+  let descriptorName = "descriptor.json";
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = requiredArg(args, index);
@@ -484,8 +744,14 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
       case "--package-prefix":
         packagePrefix = takeValue(args, ++index, arg);
         break;
+      case "--package-profiles":
+        packageProfiles = parsePackageProfiles(takeValue(args, ++index, arg));
+        break;
       case "--platform":
         platform = takeValue(args, ++index, arg);
+        break;
+      case "--descriptor-name":
+        descriptorName = takeValue(args, ++index, arg);
         break;
       default:
         throw new Error(`unknown option: ${arg}`);
@@ -509,7 +775,9 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     dryRun,
     artifactDir,
     packagePrefix,
+    packageProfiles,
     platform,
+    descriptorName,
   };
 }
 
@@ -524,6 +792,18 @@ function parseBuildTypes(value: string): readonly BuildType[] {
     }
     throw new Error(`unsupported build type: ${item}`);
   });
+}
+
+function parsePackageProfiles(value: string): readonly PackageProfileName[] {
+  return splitCommaList(value).map((name) => requiredPackageProfile(name).name);
+}
+
+function requiredPackageProfile(name: string): PackageProfile {
+  const profile = PACKAGE_PROFILE_BY_NAME.get(name as PackageProfileName);
+  if (!profile) {
+    throw new Error(`unsupported package profile: ${name}`);
+  }
+  return profile;
 }
 
 function parseVersionList(value: string): VersionTuple[] {
@@ -621,6 +901,142 @@ function parsePositiveInt(value: string, label: string): number {
     throw new Error(`expected positive integer for ${label}, got: ${value}`);
   }
   return parsed;
+}
+
+async function movePdbFiles(sourceRoot: string, pdbRoot: string): Promise<void> {
+  const pdbFiles = (await walkFiles(sourceRoot)).filter((filePath) =>
+    filePath.toLowerCase().endsWith(".pdb"),
+  );
+
+  for (const pdbFile of pdbFiles) {
+    const relativePath = path.relative(sourceRoot, pdbFile);
+    const destination = path.join(pdbRoot, relativePath);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+
+    if (await exists(destination)) {
+      const [sourceHash, destinationHash] = await Promise.all([
+        sha256File(pdbFile),
+        sha256File(destination),
+      ]);
+      if (sourceHash !== destinationHash) {
+        throw new Error(`conflicting pdb artifact path: ${relativePath}`);
+      }
+      await fs.rm(pdbFile);
+      continue;
+    }
+
+    await fs.rename(pdbFile, destination);
+  }
+}
+
+async function hasAnyFile(root: string): Promise<boolean> {
+  for (const filePath of await walkFiles(root)) {
+    const stat = await fs.lstat(filePath);
+    if (stat.isFile() || stat.isSymbolicLink()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function walkFiles(root: string): Promise<string[]> {
+  if (!(await exists(root))) {
+    return [];
+  }
+
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await walkFiles(entryPath)));
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+function shouldIncludeInDescriptor(artifactPath: string, descriptorName: string): boolean {
+  const basename = path.basename(artifactPath);
+  return (
+    basename !== descriptorName &&
+    basename !== `${descriptorName}.sha256` &&
+    !basename.endsWith(".sha256") &&
+    DESCRIPTOR_ARTIFACT_EXTENSIONS.some((extension) => basename.endsWith(extension))
+  );
+}
+
+function inferArtifactMetadata(
+  fileName: string,
+  packagePrefix: string,
+): Omit<ArtifactDescriptorEntry, "name" | "path" | "size" | "sha256"> {
+  const archiveSuffix = DESCRIPTOR_ARTIFACT_EXTENSIONS.find((extension) =>
+    fileName.endsWith(extension),
+  );
+  if (!archiveSuffix) {
+    return {};
+  }
+
+  const baseName = fileName.slice(0, -archiveSuffix.length);
+  for (const packageName of [...DEFAULT_PACKAGE_PROFILES, "pdb"] as const) {
+    const prefix = `${packagePrefix}-${packageName}-`;
+    if (!baseName.startsWith(prefix)) {
+      continue;
+    }
+
+    const rest = baseName.slice(prefix.length);
+    const match = /^(.*)-(release|relwithdebinfo)-(.+)$/.exec(rest);
+    if (!match) {
+      continue;
+    }
+
+    const llvmTag = requiredMatch(match, 1);
+    const buildType = requiredMatch(match, 2) as BuildType;
+    const platform = requiredMatch(match, 3);
+    if (packageName === "pdb") {
+      return {
+        package: "pdb",
+        type: "debug-symbols",
+        llvmTag,
+        buildType,
+        platform,
+      };
+    }
+
+    const profile = requiredPackageProfile(packageName);
+    return {
+      package: profile.name,
+      type: "component-package",
+      llvmTag,
+      buildType,
+      platform,
+      dependsOn: profile.dependsOn,
+      components: profile.components,
+    };
+  }
+
+  return {};
+}
+
+async function writeSha256File(filePath: string): Promise<string> {
+  const hash = await sha256File(filePath);
+  await fs.writeFile(`${filePath}.sha256`, `${hash}  ${path.basename(filePath)}\n`);
+  return hash;
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  return await new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = fsSync.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+function toPosixPath(value: string): string {
+  return value.split(path.sep).join("/");
 }
 
 async function captureCommand(
@@ -752,10 +1168,12 @@ function printHelp(): void {
 Actions:
   plan          Print the discovered LLVM worktree plan as JSON.
   components    Print LLVM_DISTRIBUTION_COMPONENTS.
+  profiles      Print package profile definitions.
+  descriptor    Generate descriptor.json and .sha256 files for artifacts.
   init          Configure each selected build directory.
   build         Run ninja for each selected build directory.
   install       Build install-distribution for each selected build directory.
-  package       Package each selected dist directory into artifacts/.
+  package       Package selected component profiles into artifacts/.
 
 Options:
   --llvm-dir <path>             LLVM git checkout containing tags/worktrees.
@@ -770,7 +1188,9 @@ Options:
   --jobs <number>               Ninja jobs exported to action scripts.
   --artifact-dir <path>         Package output directory.
   --package-prefix <name>       Package filename prefix.
+  --package-profiles <list>     Package profiles: llvm-core,clang-sdk,clang-tooling,clang-tidy,clang-repl.
   --platform <name>             Package filename platform segment.
+  --descriptor-name <name>      Descriptor filename.
   --dry-run                     Print commands without executing them.
 `);
 }

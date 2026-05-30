@@ -1,9 +1,15 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   BUILD_TYPE_TO_CMAKE,
   CLICE_LLVM_COMPONENTS,
+  DEFAULT_PACKAGE_PROFILES,
   EXTRA_LLVM_COMPONENTS,
   LLVM_DISTRIBUTION_COMPONENTS,
+  LLVM_PACKAGE_PROFILES,
   buildCMakeDistributionComponents,
+  createArtifactDescriptor,
   createBuildPlan,
   parseVersionTag,
   tagSuffixToPathSuffix,
@@ -92,6 +98,23 @@ describe("createBuildPlan", () => {
 });
 
 describe("distribution components", () => {
+  it("keeps package profiles split by category without a full package", () => {
+    expect(DEFAULT_PACKAGE_PROFILES).toEqual([
+      "llvm-core",
+      "clang-sdk",
+      "clang-tooling",
+      "clang-tidy",
+      "clang-repl",
+    ]);
+    expect(DEFAULT_PACKAGE_PROFILES).not.toContain("full");
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "llvm-core")?.components,
+    ).toContain("LLVMSupport");
+    expect(
+      LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "clang-tooling")?.dependsOn,
+    ).toEqual(["llvm-core", "clang-sdk"]);
+  });
+
   it("contains clice-linked components plus clang-repl", () => {
     expect(CLICE_LLVM_COMPONENTS).toContain("clangToolingInclusions");
     expect(CLICE_LLVM_COMPONENTS).toContain("clangTidyReadabilityModule");
@@ -104,6 +127,66 @@ describe("distribution components", () => {
     const cmakeValue = buildCMakeDistributionComponents();
     expect(cmakeValue).toContain("LLVMSupport;LLVMFrontendOpenMP");
     expect(cmakeValue.endsWith(";clang-repl")).toBe(true);
+  });
+});
+
+describe("artifact descriptor", () => {
+  it("describes all archive artifacts and skips checksum files", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "llvm-dist-test-"));
+    try {
+      await writeFile(
+        path.join(tempDir, "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz"),
+        "core",
+      );
+      await writeFile(
+        path.join(tempDir, "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz.sha256"),
+        "ignored",
+      );
+      await mkdir(path.join(tempDir, "nested"));
+      await writeFile(
+        path.join(
+          tempDir,
+          "nested",
+          "llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-windows-x64.tar.xz",
+        ),
+        "pdb",
+      );
+      await writeFile(path.join(tempDir, "descriptor.json"), "{}");
+
+      const descriptor = await createArtifactDescriptor(tempDir, {
+        packagePrefix: "llvm-dist",
+        generatedAt: "2026-05-30T00:00:00.000Z",
+      });
+
+      expect(descriptor).toMatchObject({
+        schemaVersion: 1,
+        generatedAt: "2026-05-30T00:00:00.000Z",
+        packagePrefix: "llvm-dist",
+        artifactCount: 2,
+      });
+      expect(descriptor.artifacts.map((artifact) => artifact.path)).toEqual([
+        "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz",
+        "nested/llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-windows-x64.tar.xz",
+      ]);
+      expect(descriptor.artifacts[0]).toMatchObject({
+        package: "llvm-core",
+        type: "component-package",
+        llvmTag: "llvmorg-21.1.8",
+        buildType: "release",
+        platform: "linux-x64",
+        dependsOn: [],
+      });
+      expect(descriptor.artifacts[0]?.components).toContain("LLVMSupport");
+      expect(descriptor.artifacts[1]).toMatchObject({
+        package: "pdb",
+        type: "debug-symbols",
+        llvmTag: "llvmorg-21.1.8",
+        buildType: "relwithdebinfo",
+        platform: "windows-x64",
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
