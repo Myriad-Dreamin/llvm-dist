@@ -2,6 +2,9 @@
 set -euo pipefail
 
 echo "run init action on ${SCRIPT_LLVM_TAG} with ${SCRIPT_CMAKE_BUILD_TYPE}"
+echo "target triples: ${SCRIPT_TARGET_TRIPLES:-unspecified}"
+echo "LLVM targets to build: ${SCRIPT_LLVM_TARGETS_TO_BUILD:-X86}"
+echo "experimental LLVM targets to build: ${SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:-none}"
 
 rm -f CMakeCache.txt
 
@@ -19,6 +22,12 @@ cmake_args=(
   "-DLLVM_DISTRIBUTION_COMPONENTS=${SCRIPT_LLVM_DISTRIBUTION_COMPONENTS}"
   "-DCMAKE_INSTALL_PREFIX=${PWD}/dist"
 )
+
+if [[ -n "${SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:-}" ]]; then
+  cmake_args+=(
+    "-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=${SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD}"
+  )
+fi
 
 if [[ "${SCRIPT_ENABLE_CCACHE:-1}" == "1" ]]; then
   export CCACHE_BASEDIR="${SCRIPT_CCACHE_BASEDIR:-${PWD}}"
