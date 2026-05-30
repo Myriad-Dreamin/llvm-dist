@@ -1,0 +1,137 @@
+name: Build LLVM Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      llvm_version:
+        description: LLVM x.y.z version to build.
+        default: 21.1.8
+        required: true
+        type: string
+      publish_release:
+        description: Upload artifacts to a GitHub Release.
+        default: false
+        required: true
+        type: boolean
+      release_tag:
+        description: Release tag to publish when publish_release is enabled.
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: llvm-artifacts-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.llvm_version || '21.1.8' }}
+  cancel-in-progress: false
+
+env:
+  LLVM_VERSION: ${{ github.event.inputs.llvm_version || '21.1.8' }}
+  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+  SCRIPT_C_COMPILER: clang
+  SCRIPT_CXX_COMPILER: clang++
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x64
+            build_type: release
+          - os: ubuntu-24.04
+            platform: linux-x64
+            build_type: relwithdebinfo
+    runs-on: ${{ matrix.os }}
+    name: llvm-${{ env.LLVM_VERSION }}-${{ matrix.build_type }}-${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install LLVM build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang lld cmake ninja-build ccache xz-utils
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
+            ccache-${{ runner.os }}-${{ matrix.build_type }}-
+
+      - name: Fetch LLVM source
+        run: |
+          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
+          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION}:refs/tags/llvmorg-${LLVM_VERSION}"
+          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION}"
+
+      - name: Reset ccache stats
+        run: ccache --zero-stats
+
+      - name: Configure LLVM
+        run: |
+          pnpm llvm init \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION}" \
+            --build-types "${{ matrix.build_type }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(nproc)"
+
+      - name: Build and install distribution
+        run: |
+          pnpm llvm install \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION}" \
+            --build-types "${{ matrix.build_type }}" \
+            --ccache \
+            --ccache-dir "${CCACHE_DIR}" \
+            --jobs "$(nproc)"
+
+      - name: Package artifact
+        run: |
+          pnpm llvm package \
+            --llvm-dir llvm-mainline \
+            --allow "${LLVM_VERSION}" \
+            --build-types "${{ matrix.build_type }}" \
+            --artifact-dir artifacts \
+            --package-prefix llvm-dist \
+            --platform "${{ matrix.platform }}"
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-dist-${{ env.LLVM_VERSION }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub release artifacts
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && github.event.inputs.release_tag != '') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
+          files: artifacts/*
