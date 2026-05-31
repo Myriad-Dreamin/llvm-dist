@@ -1,5 +1,7 @@
 name: Build LLVM Artifacts
 
+run-name: LLVM ${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }} ${{ github.event.inputs.target_batch || 'all' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -9,10 +11,23 @@ on:
         required: true
         type: string
       publish_release:
-        description: Upload artifacts to a GitHub Release
+        description: Upload artifacts to a GitHub Release; batch-6/all also publish descriptor
         default: false
         required: true
         type: boolean
+      target_batch:
+        description: Target batch to build
+        default: batch-1
+        required: true
+        type: choice
+        options:
+          - batch-1
+          - batch-2
+          - batch-3
+          - batch-4
+          - batch-5
+          - batch-6
+          - all
   push:
     tags:
       - "v*"
@@ -21,30 +36,126 @@ permissions:
   contents: write
 
 concurrency:
-  group: llvm-artifacts-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
+  group: llvm-artifacts-${{ github.workflow }}-${{ github.ref }}-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ github.event.inputs.target_batch || 'all' }}
   cancel-in-progress: false
 
 env:
   LLVM_VERSION: ${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
+  TARGET_BATCH: ${{ github.event.inputs.target_batch || 'all' }}
   CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      llvm_version: ${{ steps.plan.outputs.llvm_version }}
+      llvm_ref: ${{ steps.plan.outputs.llvm_ref }}
+      target_batch: ${{ steps.plan.outputs.target_batch }}
+      linux_native_matrix: ${{ steps.plan.outputs.linux_native_matrix }}
+      linux_cross_matrix: ${{ steps.plan.outputs.linux_cross_matrix }}
+      darwin_matrix: ${{ steps.plan.outputs.darwin_matrix }}
+      windows_matrix: ${{ steps.plan.outputs.windows_matrix }}
+      has_linux_native: ${{ steps.plan.outputs.has_linux_native }}
+      has_linux_cross: ${{ steps.plan.outputs.has_linux_cross }}
+      has_darwin: ${{ steps.plan.outputs.has_darwin }}
+      has_windows: ${{ steps.plan.outputs.has_windows }}
+    steps:
+      - id: plan
+        name: Plan target batch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          release_tag="${LLVM_VERSION}"
+          llvm_version="${release_tag#v}"
+          llvm_ref="llvmorg-${llvm_version}"
+          target_batch="${TARGET_BATCH}"
+
+          case "$target_batch" in
+            batch-1|batch-2|batch-3|batch-4|batch-5|batch-6|all) ;;
+            *)
+              echo "::error::Unsupported target batch: ${target_batch}"
+              exit 1
+              ;;
+          esac
+
+          linux_native_entries='[
+            {"os":"ubuntu-24.04","target_triple":"x86_64-unknown-linux-gnu","build_type":"release","target_batch":"batch-1"},
+            {"os":"ubuntu-24.04","target_triple":"x86_64-unknown-linux-gnu","build_type":"relwithdebinfo","target_batch":"batch-1"}
+          ]'
+
+          linux_cross_entries='[
+            {"target_triple":"aarch64-unknown-linux-gnu","build_type":"release","cmake_system_processor":"aarch64","target_batch":"batch-3"},
+            {"target_triple":"aarch64-unknown-linux-gnu","build_type":"relwithdebinfo","cmake_system_processor":"aarch64","target_batch":"batch-3"},
+            {"target_triple":"x86_64-unknown-linux-musl","build_type":"release","cmake_system_processor":"x86_64","target_batch":"batch-3"},
+            {"target_triple":"x86_64-unknown-linux-musl","build_type":"relwithdebinfo","cmake_system_processor":"x86_64","target_batch":"batch-3"},
+            {"target_triple":"armv7-unknown-linux-musleabihf","build_type":"release","cmake_system_processor":"armv7","target_batch":"batch-4"},
+            {"target_triple":"armv7-unknown-linux-musleabihf","build_type":"relwithdebinfo","cmake_system_processor":"armv7","target_batch":"batch-4"},
+            {"target_triple":"arm-unknown-linux-musleabihf","build_type":"release","cmake_system_processor":"arm","target_batch":"batch-5"},
+            {"target_triple":"arm-unknown-linux-musleabihf","build_type":"relwithdebinfo","cmake_system_processor":"arm","target_batch":"batch-5"},
+            {"target_triple":"riscv64gc-unknown-linux-musl","build_type":"release","cmake_system_processor":"riscv64","target_batch":"batch-5"},
+            {"target_triple":"riscv64gc-unknown-linux-musl","build_type":"relwithdebinfo","cmake_system_processor":"riscv64","target_batch":"batch-5"},
+            {"target_triple":"loongarch64-unknown-linux-musl","build_type":"release","cmake_system_processor":"loongarch64","target_batch":"batch-6"},
+            {"target_triple":"loongarch64-unknown-linux-musl","build_type":"relwithdebinfo","cmake_system_processor":"loongarch64","target_batch":"batch-6"}
+          ]'
+
+          darwin_entries='[
+            {"runner":"macos-15","target_triple":"aarch64-apple-darwin","build_type":"release","target_batch":"batch-2"},
+            {"runner":"macos-15","target_triple":"aarch64-apple-darwin","build_type":"relwithdebinfo","target_batch":"batch-2"},
+            {"runner":"macos-15-intel","target_triple":"x86_64-apple-darwin","build_type":"release","target_batch":"batch-2"},
+            {"runner":"macos-15-intel","target_triple":"x86_64-apple-darwin","build_type":"relwithdebinfo","target_batch":"batch-2"}
+          ]'
+
+          windows_entries='[
+            {"runner":"windows-2022","target_triple":"x86_64-pc-windows-msvc","build_type":"release","msvc_arch":"x64","target_batch":"batch-1"},
+            {"runner":"windows-2022","target_triple":"x86_64-pc-windows-msvc","build_type":"relwithdebinfo","msvc_arch":"x64","target_batch":"batch-1"},
+            {"runner":"windows-11-arm","target_triple":"aarch64-pc-windows-msvc","build_type":"release","msvc_arch":"arm64","target_batch":"batch-4"},
+            {"runner":"windows-11-arm","target_triple":"aarch64-pc-windows-msvc","build_type":"relwithdebinfo","msvc_arch":"arm64","target_batch":"batch-4"}
+          ]'
+
+          emit_matrix() {
+            local name="$1"
+            local entries="$2"
+            local matrix
+            local count
+
+            matrix="$(jq -c --arg batch "$target_batch" '{include: [.[] | select($batch == "all" or .target_batch == $batch) | del(.target_batch)]}' <<<"$entries")"
+            count="$(jq -r '.include | length' <<<"$matrix")"
+
+            echo "${name}_matrix=${matrix}" >>"${GITHUB_OUTPUT}"
+            if (( count > 0 )); then
+              echo "has_${name}=true" >>"${GITHUB_OUTPUT}"
+            else
+              echo "has_${name}=false" >>"${GITHUB_OUTPUT}"
+            fi
+            echo "${name}: ${count} matrix entries"
+          }
+
+          {
+            echo "release_tag=${release_tag}"
+            echo "llvm_version=${llvm_version}"
+            echo "llvm_ref=${llvm_ref}"
+            echo "target_batch=${target_batch}"
+          } >>"${GITHUB_OUTPUT}"
+
+          emit_matrix linux_native "$linux_native_entries"
+          emit_matrix linux_cross "$linux_cross_entries"
+          emit_matrix darwin "$darwin_entries"
+          emit_matrix windows "$windows_entries"
+
   build-linux-native:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_linux_native == 'true' }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux-x64
-            target_triple: x86_64-unknown-linux-gnu
-            build_type: release
-          - os: ubuntu-24.04
-            platform: linux-x64
-            target_triple: x86_64-unknown-linux-gnu
-            build_type: relwithdebinfo
+      matrix: ${{ fromJSON(needs.prepare.outputs.linux_native_matrix) }}
     runs-on: ${{ matrix.os }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
+      LLVM_VERSION: ${{ needs.prepare.outputs.release_tag }}
+      LLVM_VERSION_NO_PREFIX: ${{ needs.prepare.outputs.llvm_version }}
+      LLVM_REF: ${{ needs.prepare.outputs.llvm_ref }}
       SCRIPT_C_COMPILER: clang
       SCRIPT_CXX_COMPILER: clang++
 
@@ -77,11 +188,21 @@ jobs:
             ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
             ccache-${{ runner.os }}-${{ matrix.build_type }}-
 
-      - name: Fetch LLVM source
+      - name: Checkout LLVM source
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ needs.prepare.outputs.llvm_ref }}
+          path: llvm-mainline
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Register LLVM release tag
+        shell: bash
         run: |
-          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
-          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
-          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
+          git -C llvm-mainline tag --list "${LLVM_REF}"
 
       - name: Reset ccache stats
         run: ccache --zero-stats
@@ -90,7 +211,7 @@ jobs:
         run: |
           pnpm llvm init \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -101,7 +222,7 @@ jobs:
         run: |
           pnpm llvm install \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -112,12 +233,12 @@ jobs:
         run: |
           pnpm llvm package \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -126,62 +247,26 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
 
   build-linux-cross:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_linux_cross == 'true' }}
     strategy:
       fail-fast: false
-      matrix:
-        target_triple:
-          - x86_64-unknown-linux-musl
-          - aarch64-unknown-linux-gnu
-          - arm-unknown-linux-musleabihf
-          - armv7-unknown-linux-musleabihf
-          - riscv64gc-unknown-linux-musl
-          - loongarch64-unknown-linux-musl
-        build_type: [release, relwithdebinfo]
-        include:
-          - platform: linux-x64-musl
-            target_triple: x86_64-unknown-linux-musl
-            cc: x86_64-linux-musl-gcc
-            cxx: x86_64-linux-musl-g++
-            cmake_system_processor: x86_64
-          - platform: linux-arm64
-            target_triple: aarch64-unknown-linux-gnu
-            cc: aarch64-linux-gnu-gcc
-            cxx: aarch64-linux-gnu-g++
-            cmake_system_processor: aarch64
-          - platform: linux-armhf-musl
-            target_triple: arm-unknown-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            cxx: arm-linux-musleabihf-g++
-            cmake_system_processor: arm
-          - platform: linux-armv7-musl
-            target_triple: armv7-unknown-linux-musleabihf
-            cc: arm-linux-musleabihf-gcc
-            cxx: arm-linux-musleabihf-g++
-            cmake_system_processor: armv7
-          - platform: linux-riscv64-musl
-            target_triple: riscv64gc-unknown-linux-musl
-            cc: riscv64-linux-musl-gcc
-            cxx: riscv64-linux-musl-g++
-            cmake_system_processor: riscv64
-          - platform: linux-loongarch64-musl
-            target_triple: loongarch64-unknown-linux-musl
-            cc: loongarch64-linux-musl-gcc
-            cxx: loongarch64-linux-musl-g++
-            cmake_system_processor: loongarch64
+      matrix: ${{ fromJSON(needs.prepare.outputs.linux_cross_matrix) }}
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/cross-rs/${{ matrix.target_triple }}:edge
       options: --user root
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
-      SCRIPT_C_COMPILER: ${{ matrix.cc }}
-      SCRIPT_CXX_COMPILER: ${{ matrix.cxx }}
+      LLVM_VERSION: ${{ needs.prepare.outputs.release_tag }}
+      LLVM_VERSION_NO_PREFIX: ${{ needs.prepare.outputs.llvm_version }}
+      LLVM_REF: ${{ needs.prepare.outputs.llvm_ref }}
       SCRIPT_CMAKE_EXTRA_ARGS: >-
         -DCMAKE_SYSTEM_NAME=Linux
         -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_system_processor }}
@@ -199,7 +284,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bash ca-certificates cmake g++ git ninja-build ccache tar xz-utils python3
+            bash ca-certificates clang cmake g++ git lld ninja-build ccache tar xz-utils python3
 
       - uses: actions/checkout@v4
 
@@ -215,11 +300,21 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Fetch LLVM source
+      - name: Checkout LLVM source
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ needs.prepare.outputs.llvm_ref }}
+          path: llvm-mainline
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Register LLVM release tag
+        shell: bash
         run: |
-          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
-          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
-          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
+          git -C llvm-mainline tag --list "${LLVM_REF}"
 
       - name: Build native tablegen tools
         run: |
@@ -231,6 +326,149 @@ jobs:
             -DLLVM_TARGETS_TO_BUILD=Native
           cmake --build llvm-native-tools --target llvm-tblgen clang-tblgen mlir-tblgen --parallel "$(nproc)"
 
+      - name: Resolve cross compilers
+        shell: bash
+        run: |
+          target="${{ matrix.target_triple }}"
+          target_env="$(printf '%s' "$target" | tr '[:lower:]-' '[:upper:]_')"
+          target_env_lower="$(printf '%s' "$target" | tr '-' '_')"
+
+          resolve_tool() {
+            local tool="$1"
+            if [[ -z "$tool" ]]; then
+              return 1
+            fi
+
+            if [[ "$tool" == */* ]]; then
+              if [[ ! -x "$tool" ]]; then
+                return 1
+              fi
+              readlink -f "$tool" 2>/dev/null || realpath "$tool" 2>/dev/null || printf '%s\n' "$tool"
+              return 0
+            fi
+
+            command -v "$tool"
+          }
+
+          selected_c=""
+          selected_cxx=""
+          selected_needs_target="0"
+
+          try_pair() {
+            local c="$1"
+            local cxx="$2"
+            local needs_target="${3:-0}"
+            local c_path=""
+            local cxx_path=""
+
+            c_path="$(resolve_tool "$c")" || return 1
+            cxx_path="$(resolve_tool "$cxx")" || return 1
+
+            selected_c="$c_path"
+            selected_cxx="$cxx_path"
+            selected_needs_target="$needs_target"
+            return 0
+          }
+
+          try_linker_pair() {
+            local linker="$1"
+            if [[ -z "$linker" ]]; then
+              return 1
+            fi
+
+            if [[ "$linker" == *gcc ]]; then
+              try_pair "$linker" "${linker%gcc}g++" 0
+              return $?
+            fi
+
+            if [[ "$linker" == *cc ]]; then
+              try_pair "$linker" "${linker%cc}c++" 0
+              return $?
+            fi
+
+            if [[ "$linker" == *clang ]]; then
+              try_pair "$linker" "${linker}++" 1
+              return $?
+            fi
+
+            return 1
+          }
+
+          try_env_pair() {
+            local cc_var="$1"
+            local cxx_var="$2"
+            local cc_value="${!cc_var:-}"
+            local cxx_value="${!cxx_var:-}"
+
+            if [[ -z "$cc_value" || -z "$cxx_value" ]]; then
+              return 1
+            fi
+
+            try_pair "$cc_value" "$cxx_value" 0
+          }
+
+          try_known_pairs() {
+            case "$target" in
+              x86_64-unknown-linux-musl)
+                try_pair x86_64-linux-musl-gcc x86_64-linux-musl-g++ 0 && return 0
+                try_pair x86_64-unknown-linux-musl-gcc x86_64-unknown-linux-musl-g++ 0 && return 0
+                ;;
+              aarch64-unknown-linux-gnu)
+                try_pair aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ 0 && return 0
+                try_pair aarch64-unknown-linux-gnu-gcc aarch64-unknown-linux-gnu-g++ 0 && return 0
+                ;;
+              arm-unknown-linux-musleabihf)
+                try_pair arm-linux-musleabihf-gcc arm-linux-musleabihf-g++ 0 && return 0
+                try_pair arm-unknown-linux-musleabihf-gcc arm-unknown-linux-musleabihf-g++ 0 && return 0
+                ;;
+              armv7-unknown-linux-musleabihf)
+                try_pair arm-linux-musleabihf-gcc arm-linux-musleabihf-g++ 0 && return 0
+                try_pair armv7-linux-musleabihf-gcc armv7-linux-musleabihf-g++ 0 && return 0
+                try_pair armv7-unknown-linux-musleabihf-gcc armv7-unknown-linux-musleabihf-g++ 0 && return 0
+                ;;
+              riscv64gc-unknown-linux-musl)
+                try_pair riscv64gc-unknown-linux-musl-gcc riscv64gc-unknown-linux-musl-g++ 0 && return 0
+                try_pair riscv64-unknown-linux-musl-gcc riscv64-unknown-linux-musl-g++ 0 && return 0
+                try_pair riscv64-linux-musl-gcc riscv64-linux-musl-g++ 0 && return 0
+                ;;
+              loongarch64-unknown-linux-musl)
+                try_pair loongarch64-unknown-linux-musl-gcc loongarch64-unknown-linux-musl-g++ 0 && return 0
+                try_pair loongarch64-linux-musl-gcc loongarch64-linux-musl-g++ 0 && return 0
+                ;;
+            esac
+
+            return 1
+          }
+
+          cargo_linker_var="CARGO_TARGET_${target_env}_LINKER"
+
+          try_env_pair "CC_${target_env}" "CXX_${target_env}" ||
+            try_env_pair "CC_${target_env_lower}" "CXX_${target_env_lower}" ||
+            try_linker_pair "${!cargo_linker_var:-}" ||
+            try_known_pairs ||
+            try_pair clang clang++ 1 || {
+              echo "::error::No C/C++ compiler pair found for ${target}"
+              env | sort | grep -E '^(CC|CXX|CARGO_TARGET_.*_LINKER)=' || true
+              exit 1
+            }
+
+          extra_cmake_args="${SCRIPT_CMAKE_EXTRA_ARGS:-}"
+          if [[ "$selected_needs_target" == "1" ]]; then
+            extra_cmake_args="${extra_cmake_args} -DCMAKE_C_COMPILER_TARGET=${target} -DCMAKE_CXX_COMPILER_TARGET=${target} -DCMAKE_ASM_COMPILER_TARGET=${target}"
+          fi
+
+          {
+            echo "SCRIPT_C_COMPILER=${selected_c}"
+            echo "SCRIPT_CXX_COMPILER=${selected_cxx}"
+            echo "SCRIPT_ASM_COMPILER=${selected_c}"
+            echo "SCRIPT_CMAKE_EXTRA_ARGS=${extra_cmake_args}"
+          } >>"${GITHUB_ENV}"
+
+          echo "C compiler: ${selected_c}"
+          echo "CXX compiler: ${selected_cxx}"
+          echo "ASM compiler: ${selected_c}"
+          echo "extra CMake args: ${extra_cmake_args}"
+
       - name: Reset ccache stats
         run: ccache --zero-stats
 
@@ -238,7 +476,7 @@ jobs:
         run: |
           pnpm llvm init \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -249,7 +487,7 @@ jobs:
         run: |
           pnpm llvm install \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -260,12 +498,12 @@ jobs:
         run: |
           pnpm llvm package \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -274,29 +512,23 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
 
   build-darwin:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_darwin == 'true' }}
     strategy:
       fail-fast: false
-      matrix:
-        target_triple:
-          - x86_64-apple-darwin
-          - aarch64-apple-darwin
-        build_type: [release, relwithdebinfo]
-        include:
-          - runner: macos-15-intel
-            platform: darwin-x64
-            target_triple: x86_64-apple-darwin
-          - runner: macos-15
-            platform: darwin-arm64
-            target_triple: aarch64-apple-darwin
+      matrix: ${{ fromJSON(needs.prepare.outputs.darwin_matrix) }}
     runs-on: ${{ matrix.runner }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
+      LLVM_VERSION: ${{ needs.prepare.outputs.release_tag }}
+      LLVM_VERSION_NO_PREFIX: ${{ needs.prepare.outputs.llvm_version }}
+      LLVM_REF: ${{ needs.prepare.outputs.llvm_ref }}
       SCRIPT_C_COMPILER: clang
       SCRIPT_CXX_COMPILER: clang++
 
@@ -327,11 +559,21 @@ jobs:
             ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
             ccache-${{ runner.os }}-${{ matrix.build_type }}-
 
-      - name: Fetch LLVM source
+      - name: Checkout LLVM source
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ needs.prepare.outputs.llvm_ref }}
+          path: llvm-mainline
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Register LLVM release tag
+        shell: bash
         run: |
-          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
-          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
-          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
+          git -C llvm-mainline tag --list "${LLVM_REF}"
 
       - name: Reset ccache stats
         run: ccache --zero-stats
@@ -340,7 +582,7 @@ jobs:
         run: |
           pnpm llvm init \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -351,7 +593,7 @@ jobs:
         run: |
           pnpm llvm install \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
             --ccache \
@@ -362,12 +604,12 @@ jobs:
         run: |
           pnpm llvm package \
             --llvm-dir llvm-mainline \
-            --allow "${LLVM_VERSION#v}" \
+            --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --artifact-dir artifacts \
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Show ccache stats
         if: always()
@@ -376,31 +618,23 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
 
   build-windows:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_windows == 'true' }}
     strategy:
       fail-fast: false
-      matrix:
-        target_triple:
-          - x86_64-pc-windows-msvc
-          - aarch64-pc-windows-msvc
-        build_type: [release, relwithdebinfo]
-        include:
-          - runner: windows-2022
-            platform: windows-x64
-            target_triple: x86_64-pc-windows-msvc
-            msvc_arch: x64
-          - runner: windows-11-arm
-            platform: windows-arm64
-            target_triple: aarch64-pc-windows-msvc
-            msvc_arch: arm64
+      matrix: ${{ fromJSON(needs.prepare.outputs.windows_matrix) }}
     runs-on: ${{ matrix.runner }}
-    name: llvm-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+    name: llvm-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
     env:
+      LLVM_VERSION: ${{ needs.prepare.outputs.release_tag }}
+      LLVM_VERSION_NO_PREFIX: ${{ needs.prepare.outputs.llvm_version }}
+      LLVM_REF: ${{ needs.prepare.outputs.llvm_ref }}
       SCRIPT_C_COMPILER: cl
       SCRIPT_CXX_COMPILER: cl
 
@@ -423,20 +657,28 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Fetch LLVM source
+      - name: Checkout LLVM source
+        uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: ${{ needs.prepare.outputs.llvm_ref }}
+          path: llvm-mainline
+          fetch-depth: 1
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Register LLVM release tag
         shell: bash
         run: |
-          git clone --filter=blob:none --branch "llvmorg-${LLVM_VERSION#v}" --single-branch https://github.com/llvm/llvm-project.git llvm-mainline
-          git -C llvm-mainline fetch --force --depth=1 origin "refs/tags/llvmorg-${LLVM_VERSION#v}:refs/tags/llvmorg-${LLVM_VERSION#v}"
-          git -C llvm-mainline tag --list "llvmorg-${LLVM_VERSION#v}"
+          git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
+          git -C llvm-mainline tag --list "${LLVM_REF}"
 
       - name: Configure LLVM
         shell: pwsh
         run: |
-          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
           pnpm llvm init `
             --llvm-dir llvm-mainline `
-            --allow "$llvmVersion" `
+            --allow "$env:LLVM_VERSION_NO_PREFIX" `
             --build-types "${{ matrix.build_type }}" `
             --target-triples "${{ matrix.target_triple }}" `
             --no-ccache `
@@ -445,10 +687,9 @@ jobs:
       - name: Build and install distribution
         shell: pwsh
         run: |
-          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
           pnpm llvm install `
             --llvm-dir llvm-mainline `
-            --allow "$llvmVersion" `
+            --allow "$env:LLVM_VERSION_NO_PREFIX" `
             --build-types "${{ matrix.build_type }}" `
             --target-triples "${{ matrix.target_triple }}" `
             --no-ccache `
@@ -457,31 +698,34 @@ jobs:
       - name: Package artifact
         shell: pwsh
         run: |
-          $llvmVersion = $env:LLVM_VERSION.TrimStart("v")
           pnpm llvm package `
             --llvm-dir llvm-mainline `
-            --allow "$llvmVersion" `
+            --allow "$env:LLVM_VERSION_NO_PREFIX" `
             --build-types "${{ matrix.build_type }}" `
             --artifact-dir artifacts `
             --package-prefix llvm-dist `
             --target-triples "${{ matrix.target_triple }}" `
-            --platform "${{ matrix.platform }}"
+            --package-target-triple "${{ matrix.target_triple }}"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-${{ matrix.build_type }}-${{ matrix.platform }}
+          name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-${{ matrix.build_type }}-${{ matrix.target_triple }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
 
   descriptor:
     needs:
+      - prepare
       - build-linux-native
       - build-linux-cross
       - build-darwin
       - build-windows
+    if: ${{ always() && needs.prepare.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
+    env:
+      LLVM_VERSION: ${{ needs.prepare.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -501,30 +745,67 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: llvm-dist-${{ env.LLVM_VERSION }}-*
-          path: artifacts
+          path: artifacts/current
           merge-multiple: true
 
+      - name: Download existing release artifacts for final descriptor
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/release
+          if ! gh release view "${LLVM_VERSION}" >/dev/null; then
+            echo "::error::GitHub Release ${LLVM_VERSION} does not exist. Publish batch-1 through batch-5 before running batch-6 descriptor merge."
+            exit 1
+          fi
+          gh release download "${LLVM_VERSION}" \
+            --dir artifacts/release \
+            --pattern "llvm-dist-*.tar.xz" \
+            --skip-existing
+
+      - name: Prepare descriptor input
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
+        run: |
+          mkdir -p artifacts/release
+          cp -a artifacts/current/. artifacts/release/
+
       - name: Generate descriptor and checksums
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
         run: |
           pnpm llvm descriptor \
-            --artifact-dir artifacts \
+            --artifact-dir artifacts/release \
             --package-prefix llvm-dist \
             --descriptor-name descriptor.json
 
       - name: Upload descriptor
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
         uses: actions/upload-artifact@v4
         with:
-          name: llvm-dist-${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}-descriptor
+          name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-descriptor
           path: |
-            artifacts/descriptor.json
-            artifacts/descriptor.json.sha256
-            artifacts/*.sha256
+            artifacts/release/descriptor.json
+            artifacts/release/descriptor.json.sha256
+            artifacts/release/*.sha256
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub release artifacts
-        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true') }}
+      - name: Publish batch release artifacts
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && needs.prepare.outputs.target_batch != 'batch-6' && needs.prepare.outputs.target_batch != 'all' }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.release_tag || github.ref_name }}
-          files: artifacts/*
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          overwrite_files: true
+          files: |
+            artifacts/current/*.tar.xz
+            artifacts/current/*.tar.xz.sha256
+
+      - name: Publish final release artifacts
+        if: ${{ (needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all') && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')) }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          overwrite_files: true
+          files: |
+            artifacts/current/*.tar.xz
+            artifacts/release/descriptor.json
+            artifacts/release/*.sha256
