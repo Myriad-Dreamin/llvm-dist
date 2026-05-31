@@ -675,9 +675,13 @@ async function createPackageArchive(
   );
 
   await fs.rm(archivePath, { force: true });
-  await runCommand("tar", ["-C", stagingDir, "-cJf", archivePath, "."], {
-    dryRun: options.dryRun,
-  });
+  await runCommand(
+    "cmake",
+    ["-E", "chdir", stagingDir, "cmake", "-E", "tar", "cJf", archivePath, "."],
+    {
+      dryRun: options.dryRun,
+    },
+  );
   await writeSha256File(archivePath);
 }
 
