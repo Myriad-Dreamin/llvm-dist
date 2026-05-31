@@ -15,7 +15,7 @@ import {
   createBuildPlan,
   defaultTargetTriplesForPlatform,
   experimentalLlvmTargetsToBuildForVersion,
-  targetTripleForPlatform,
+  targetTripleForPackageTarget,
   llvmTargetsToBuildForTriples,
   parseVersionTag,
   stableLlvmTargetsToBuildForVersion,
@@ -185,10 +185,12 @@ describe("target triples", () => {
     ).toEqual(["X86", "AArch64", "ARM"]);
   });
 
-  it("infers triples from package platform aliases", () => {
-    expect(targetTripleForPlatform("linux-x64")).toBe("x86_64-unknown-linux-gnu");
-    expect(targetTripleForPlatform("win32-arm64")).toBe("aarch64-pc-windows-msvc");
-    expect(targetTripleForPlatform("x86_64-unknown-linux-musl")).toBe("x86_64-unknown-linux-musl");
+  it("infers triples from package targets and legacy aliases", () => {
+    expect(targetTripleForPackageTarget("linux-x64")).toBe("x86_64-unknown-linux-gnu");
+    expect(targetTripleForPackageTarget("win32-arm64")).toBe("aarch64-pc-windows-msvc");
+    expect(targetTripleForPackageTarget("x86_64-unknown-linux-musl")).toBe(
+      "x86_64-unknown-linux-musl",
+    );
     expect(defaultTargetTriplesForPlatform("linux-x64")).toEqual(["x86_64-unknown-linux-gnu"]);
   });
 
@@ -216,11 +218,17 @@ describe("artifact descriptor", () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "llvm-dist-test-"));
     try {
       await writeFile(
-        path.join(tempDir, "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz"),
+        path.join(
+          tempDir,
+          "llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz",
+        ),
         "core",
       );
       await writeFile(
-        path.join(tempDir, "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz.sha256"),
+        path.join(
+          tempDir,
+          "llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz.sha256",
+        ),
         "ignored",
       );
       await mkdir(path.join(tempDir, "nested"));
@@ -228,7 +236,7 @@ describe("artifact descriptor", () => {
         path.join(
           tempDir,
           "nested",
-          "llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-windows-x64.tar.xz",
+          "llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-x86_64-pc-windows-msvc.tar.xz",
         ),
         "pdb",
       );
@@ -246,27 +254,27 @@ describe("artifact descriptor", () => {
         artifactCount: 2,
       });
       expect(descriptor.artifacts.map((artifact) => artifact.path)).toEqual([
-        "llvm-dist-llvm-core-llvmorg-21.1.8-release-linux-x64.tar.xz",
-        "nested/llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-windows-x64.tar.xz",
+        "llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz",
+        "nested/llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-x86_64-pc-windows-msvc.tar.xz",
       ]);
       expect(descriptor.artifacts[0]).toMatchObject({
         package: "llvm-core",
         type: "component-package",
         llvmTag: "llvmorg-21.1.8",
         buildType: "release",
-        platform: "linux-x64",
         targetTriple: "x86_64-unknown-linux-gnu",
         dependsOn: [],
       });
+      expect(descriptor.artifacts[0]?.platform).toBeUndefined();
       expect(descriptor.artifacts[0]?.components).toContain("LLVMSupport");
       expect(descriptor.artifacts[1]).toMatchObject({
         package: "pdb",
         type: "debug-symbols",
         llvmTag: "llvmorg-21.1.8",
         buildType: "relwithdebinfo",
-        platform: "windows-x64",
         targetTriple: "x86_64-pc-windows-msvc",
       });
+      expect(descriptor.artifacts[1]?.platform).toBeUndefined();
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
