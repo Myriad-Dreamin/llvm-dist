@@ -83,15 +83,15 @@ Generate a descriptor for every archive under `artifacts/` and refresh matching
 pnpm llvm descriptor --artifact-dir artifacts
 ```
 
-Each package filename includes the profile:
+Each package filename includes the profile and target triple:
 
 ```text
-llvm-dist-llvm-core-llvmorg-21.1.8-relwithdebinfo-linux-x64.tar.xz
-llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-linux-x64.tar.xz
-llvm-dist-clang-tooling-llvmorg-21.1.8-relwithdebinfo-linux-x64.tar.xz
-llvm-dist-clang-tidy-llvmorg-21.1.8-relwithdebinfo-linux-x64.tar.xz
-llvm-dist-clang-repl-llvmorg-21.1.8-relwithdebinfo-linux-x64.tar.xz
-llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-windows-x64.tar.xz
+llvm-dist-llvm-core-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
+llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
+llvm-dist-clang-tooling-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
+llvm-dist-clang-tidy-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
+llvm-dist-clang-repl-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
+llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-x86_64-pc-windows-msvc.tar.xz
 ```
 
 The action scripts receive these environment variables from the TypeScript
@@ -106,6 +106,11 @@ runner:
 - `SCRIPT_LLVM_TARGETS_TO_BUILD`
 - `SCRIPT_ENABLE_CCACHE`
 - `SCRIPT_CCACHE_DIR`
+- `SCRIPT_C_COMPILER`
+- `SCRIPT_CXX_COMPILER`
+- `SCRIPT_ASM_COMPILER`
+- `SCRIPT_CMAKE_EXTRA_ARGS`
+- `SCRIPT_PACKAGE_TARGET`
 - `SCRIPT_BUILD_JOBS`
 
 ## Workflows
@@ -114,7 +119,10 @@ runner:
 - `Build LLVM Artifacts` builds `release` and `relwithdebinfo` artifacts for the
   configured target triples. Native Linux, Windows, and Darwin targets build on
   matching GitHub runners; non-native Linux targets build inside
-  `ghcr.io/cross-rs/<target-triple>:edge` containers. The workflow uploads split
+  `ghcr.io/cross-rs/<target-triple>:edge` containers. The Linux cross job
+  resolves the target compiler pair inside each container and passes full
+  C/C++/ASM compiler paths to CMake. Job names, workflow artifact names, and
+  package filenames use target triples directly. The workflow uploads split
   artifacts, generates a single `descriptor.json` containing every archive, and
   can publish those archives plus checksums to a GitHub Release when run from a
   tag or with `publish_release`.

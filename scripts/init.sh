@@ -5,6 +5,9 @@ echo "run init action on ${SCRIPT_LLVM_TAG} with ${SCRIPT_CMAKE_BUILD_TYPE}"
 echo "target triples: ${SCRIPT_TARGET_TRIPLES:-unspecified}"
 echo "LLVM targets to build: ${SCRIPT_LLVM_TARGETS_TO_BUILD:-X86}"
 echo "experimental LLVM targets to build: ${SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:-none}"
+echo "C compiler: ${SCRIPT_C_COMPILER:-default}"
+echo "CXX compiler: ${SCRIPT_CXX_COMPILER:-default}"
+echo "ASM compiler: ${SCRIPT_ASM_COMPILER:-default}"
 
 rm -f CMakeCache.txt
 
@@ -44,6 +47,10 @@ fi
 
 if [[ -n "${SCRIPT_CXX_COMPILER:-}" ]]; then
   cmake_args+=("-DCMAKE_CXX_COMPILER=${SCRIPT_CXX_COMPILER}")
+fi
+
+if [[ -n "${SCRIPT_ASM_COMPILER:-}" ]]; then
+  cmake_args+=("-DCMAKE_ASM_COMPILER=${SCRIPT_ASM_COMPILER}")
 fi
 
 if [[ -n "${SCRIPT_CMAKE_EXTRA_ARGS:-}" ]]; then
