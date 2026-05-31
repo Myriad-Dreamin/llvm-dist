@@ -122,7 +122,17 @@ runner:
   `ghcr.io/cross-rs/<target-triple>:edge` containers. The Linux cross job
   resolves the target compiler pair inside each container and passes full
   C/C++/ASM compiler paths to CMake. Job names, workflow artifact names, and
-  package filenames use target triples directly. The workflow uploads split
-  artifacts, generates a single `descriptor.json` containing every archive, and
-  can publish those archives plus checksums to a GitHub Release when run from a
-  tag or with `publish_release`.
+  package filenames use target triples directly. Workflow dispatches default to
+  `batch-1`, and each batch builds at most two target triples:
+  `batch-1` builds `x86_64-unknown-linux-gnu` and
+  `x86_64-pc-windows-msvc`; `batch-2` builds `aarch64-apple-darwin` and
+  `x86_64-apple-darwin`; `batch-3` builds `aarch64-unknown-linux-gnu` and
+  `x86_64-unknown-linux-musl`; `batch-4` builds `aarch64-pc-windows-msvc`
+  and `armv7-unknown-linux-musleabihf`; `batch-5` builds
+  `arm-unknown-linux-musleabihf` and `riscv64gc-unknown-linux-musl`; `batch-6`
+  builds `loongarch64-unknown-linux-musl`. Tag pushes build `all` batches. The
+  LLVM source checkout uses `actions/checkout` with `fetch-depth: 1` and
+  `filter: blob:none` to reduce checkout size. The workflow uploads split
+  artifacts, generates a `descriptor.json` containing every archive from the
+  current run, and can publish those archives plus checksums to a GitHub Release
+  only for `all` target batches.
