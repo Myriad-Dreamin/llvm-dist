@@ -134,5 +134,10 @@ runner:
   LLVM source checkout uses `actions/checkout` with `fetch-depth: 1` and
   `filter: blob:none` to reduce checkout size. The workflow uploads split
   artifacts, generates a `descriptor.json` containing every archive from the
-  current run, and can publish those archives plus checksums to a GitHub Release
-  only for `all` target batches.
+  current run for `all` builds, and can publish those archives plus checksums to
+  a GitHub Release. For batched release publishing, run `batch-1` through
+  `batch-5` with `publish_release` enabled to upload each batch's archives to
+  the same release tag, then run `batch-6` with `publish_release` enabled.
+  `batch-6` downloads the existing release archives, merges them with its own
+  current-run archives, and publishes the complete `descriptor.json` plus
+  checksums.

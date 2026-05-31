@@ -11,7 +11,7 @@ on:
         required: true
         type: string
       publish_release:
-        description: Upload artifacts to a GitHub Release when target_batch is all
+        description: Upload artifacts to a GitHub Release; batch-6/all also publish descriptor
         default: false
         required: true
         type: boolean
@@ -745,30 +745,67 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: llvm-dist-${{ env.LLVM_VERSION }}-*
-          path: artifacts
+          path: artifacts/current
           merge-multiple: true
 
+      - name: Download existing release artifacts for final descriptor
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p artifacts/release
+          if ! gh release view "${LLVM_VERSION}" >/dev/null; then
+            echo "::error::GitHub Release ${LLVM_VERSION} does not exist. Publish batch-1 through batch-5 before running batch-6 descriptor merge."
+            exit 1
+          fi
+          gh release download "${LLVM_VERSION}" \
+            --dir artifacts/release \
+            --pattern "llvm-dist-*.tar.xz" \
+            --skip-existing
+
+      - name: Prepare descriptor input
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
+        run: |
+          mkdir -p artifacts/release
+          cp -a artifacts/current/. artifacts/release/
+
       - name: Generate descriptor and checksums
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
         run: |
           pnpm llvm descriptor \
-            --artifact-dir artifacts \
+            --artifact-dir artifacts/release \
             --package-prefix llvm-dist \
             --descriptor-name descriptor.json
 
       - name: Upload descriptor
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
         uses: actions/upload-artifact@v4
         with:
           name: llvm-dist-${{ needs.prepare.outputs.release_tag }}-descriptor
           path: |
-            artifacts/descriptor.json
-            artifacts/descriptor.json.sha256
-            artifacts/*.sha256
+            artifacts/release/descriptor.json
+            artifacts/release/descriptor.json.sha256
+            artifacts/release/*.sha256
           if-no-files-found: error
           retention-days: 14
 
-      - name: Publish GitHub release artifacts
-        if: ${{ needs.prepare.outputs.target_batch == 'all' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')) }}
+      - name: Publish batch release artifacts
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && needs.prepare.outputs.target_batch != 'batch-6' && needs.prepare.outputs.target_batch != 'all' }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
-          files: artifacts/*
+          overwrite_files: true
+          files: |
+            artifacts/current/*.tar.xz
+            artifacts/current/*.tar.xz.sha256
+
+      - name: Publish final release artifacts
+        if: ${{ (needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all') && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')) }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          overwrite_files: true
+          files: |
+            artifacts/current/*.tar.xz
+            artifacts/release/descriptor.json
+            artifacts/release/*.sha256
