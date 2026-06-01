@@ -642,15 +642,25 @@ async function packageBuild(
       );
     }
 
-    await movePdbFiles(profileStagingDir, pdbStagingDir);
-    await createPackageArchive(profileStagingDir, profile.name, task, buildType, options);
+    try {
+      await movePdbFiles(profileStagingDir, pdbStagingDir);
+      await createPackageArchive(profileStagingDir, profile.name, task, buildType, options);
+    } finally {
+      await removePackageStagingDir(profileStagingDir, profile.name, options);
+    }
   }
 
   if (await hasAnyFile(pdbStagingDir)) {
-    await createPackageArchive(pdbStagingDir, "pdb", task, buildType, options);
+    try {
+      await createPackageArchive(pdbStagingDir, "pdb", task, buildType, options);
+    } finally {
+      await removePackageStagingDir(pdbStagingDir, "pdb", options);
+    }
   } else {
     console.log(`skip pdb package for ${task.llvmTag} ${buildType}: no .pdb files`);
   }
+
+  await fs.rm(stagingRoot, { recursive: true, force: true });
 }
 
 async function createPackageArchive(
@@ -683,6 +693,19 @@ async function createPackageArchive(
     },
   );
   await writeSha256File(archivePath);
+}
+
+async function removePackageStagingDir(
+  stagingDir: string,
+  packageName: PackageProfileName | "pdb",
+  options: CliOptions,
+): Promise<void> {
+  if (options.dryRun) {
+    console.log(`[dry-run] remove staging for ${packageName}: ${stagingDir}`);
+    return;
+  }
+
+  await fs.rm(stagingDir, { recursive: true, force: true });
 }
 
 export async function createArtifactDescriptor(
