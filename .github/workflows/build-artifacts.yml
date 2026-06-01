@@ -278,9 +278,6 @@ jobs:
         -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
         -DLLVM_HOST_TRIPLE=${{ matrix.target_triple }}
         -DLLVM_DEFAULT_TARGET_TRIPLE=${{ matrix.target_triple }}
-        -DLLVM_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/llvm-tblgen
-        -DCLANG_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/clang-tblgen
-        -DMLIR_TABLEGEN=${{ github.workspace }}/llvm-native-tools/bin/mlir-tblgen
         -DLLVM_ENABLE_ZLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
 
@@ -457,6 +454,16 @@ jobs:
             }
 
           extra_cmake_args="${SCRIPT_CMAKE_EXTRA_ARGS:-}"
+          native_tools_bin="${GITHUB_WORKSPACE}/llvm-native-tools/bin"
+          for tool in llvm-tblgen clang-tblgen mlir-tblgen; do
+            if [[ ! -x "${native_tools_bin}/${tool}" ]]; then
+              echo "::error::Missing native tablegen tool: ${native_tools_bin}/${tool}"
+              ls -la "${native_tools_bin}" || true
+              exit 1
+            fi
+          done
+
+          extra_cmake_args="${extra_cmake_args} -DLLVM_TABLEGEN=${native_tools_bin}/llvm-tblgen -DCLANG_TABLEGEN=${native_tools_bin}/clang-tblgen -DMLIR_TABLEGEN=${native_tools_bin}/mlir-tblgen"
           if [[ "$selected_needs_target" == "1" ]]; then
             extra_cmake_args="${extra_cmake_args} -DCMAKE_C_COMPILER_TARGET=${target} -DCMAKE_CXX_COMPILER_TARGET=${target} -DCMAKE_ASM_COMPILER_TARGET=${target}"
           fi
