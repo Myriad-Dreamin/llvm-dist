@@ -42,7 +42,6 @@ concurrency:
 env:
   LLVM_VERSION: ${{ github.event.inputs.release_tag || github.ref_name || 'v21.1.8' }}
   TARGET_BATCH: ${{ github.event.inputs.target_batch || 'all' }}
-  CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
 
 jobs:
   prepare:
@@ -177,16 +176,7 @@ jobs:
       - name: Install LLVM build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang lld cmake ninja-build ccache xz-utils
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
-            ccache-${{ runner.os }}-${{ matrix.build_type }}-
+          sudo apt-get install -y build-essential clang lld cmake ninja-build xz-utils
 
       - name: Checkout LLVM source
         uses: actions/checkout@v4
@@ -204,9 +194,6 @@ jobs:
           git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
           git -C llvm-mainline tag --list "${LLVM_REF}"
 
-      - name: Reset ccache stats
-        run: ccache --zero-stats
-
       - name: Configure LLVM
         run: |
           pnpm llvm init \
@@ -214,8 +201,6 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
 
       - name: Build and install distribution
@@ -225,18 +210,7 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
-
-      - name: Free packaging disk space
-        run: |
-          ccache --clear
-          rm -rf "${CCACHE_DIR}"
 
       - name: Package artifact
         run: |
@@ -286,7 +260,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            bash ca-certificates clang cmake g++ git lld ninja-build ccache tar xz-utils python3
+            bash ca-certificates clang cmake g++ git lld ninja-build tar xz-utils python3
 
       - uses: actions/checkout@v4
 
@@ -480,9 +454,6 @@ jobs:
           echo "ASM compiler: ${selected_c}"
           echo "extra CMake args: ${extra_cmake_args}"
 
-      - name: Reset ccache stats
-        run: ccache --zero-stats
-
       - name: Configure LLVM
         run: |
           pnpm llvm init \
@@ -490,8 +461,6 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
 
       - name: Build and install distribution
@@ -501,18 +470,7 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
-
-      - name: Free packaging disk space
-        run: |
-          ccache --clear
-          rm -rf "${CCACHE_DIR}"
 
       - name: Package artifact
         run: |
@@ -564,16 +522,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install LLVM build dependencies
-        run: brew install ninja ccache xz zstd
-
-      - name: Restore ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ env.LLVM_VERSION }}-
-            ccache-${{ runner.os }}-${{ matrix.build_type }}-
+        run: brew install ninja xz zstd
 
       - name: Checkout LLVM source
         uses: actions/checkout@v4
@@ -591,9 +540,6 @@ jobs:
           git -C llvm-mainline tag --force "${LLVM_REF}" HEAD
           git -C llvm-mainline tag --list "${LLVM_REF}"
 
-      - name: Reset ccache stats
-        run: ccache --zero-stats
-
       - name: Configure LLVM
         run: |
           pnpm llvm init \
@@ -601,8 +547,6 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(sysctl -n hw.ncpu)"
 
       - name: Build and install distribution
@@ -612,18 +556,7 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --ccache \
-            --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(sysctl -n hw.ncpu)"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
-
-      - name: Free packaging disk space
-        run: |
-          ccache --clear
-          rm -rf "${CCACHE_DIR}"
 
       - name: Package artifact
         run: |
@@ -702,7 +635,6 @@ jobs:
             --allow "$env:LLVM_VERSION_NO_PREFIX" `
             --build-types "${{ matrix.build_type }}" `
             --target-triples "${{ matrix.target_triple }}" `
-            --no-ccache `
             --jobs "$env:NUMBER_OF_PROCESSORS"
 
       - name: Build and install distribution
@@ -713,7 +645,6 @@ jobs:
             --allow "$env:LLVM_VERSION_NO_PREFIX" `
             --build-types "${{ matrix.build_type }}" `
             --target-triples "${{ matrix.target_triple }}" `
-            --no-ccache `
             --jobs "$env:NUMBER_OF_PROCESSORS"
 
       - name: Package artifact
