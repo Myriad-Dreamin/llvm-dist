@@ -312,7 +312,6 @@ jobs:
           ref: ${{ needs.prepare.outputs.llvm_ref }}
           path: llvm-mainline
           fetch-depth: 1
-          filter: blob:none
           persist-credentials: false
 
       - name: Register LLVM release tag
