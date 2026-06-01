@@ -3,9 +3,8 @@
 LLVM distribution build orchestration for our release artifacts.
 
 This repository replaces the legacy Python
-`build-llvm-toolchains.py` flow with a TypeScript CLI and ccache-aware
-build scripts. The default build plan preserves the old allow-list
-versions:
+`build-llvm-toolchains.py` flow with a TypeScript CLI and build scripts. The
+default build plan preserves the old allow-list versions:
 
 - `15.0.7`
 - `21.1.8`
@@ -104,8 +103,6 @@ runner:
 - `SCRIPT_LLVM_DISTRIBUTION_COMPONENTS`
 - `SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD`
 - `SCRIPT_LLVM_TARGETS_TO_BUILD`
-- `SCRIPT_ENABLE_CCACHE`
-- `SCRIPT_CCACHE_DIR`
 - `SCRIPT_C_COMPILER`
 - `SCRIPT_CXX_COMPILER`
 - `SCRIPT_ASM_COMPILER`

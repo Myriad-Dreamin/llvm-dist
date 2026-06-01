@@ -103,11 +103,6 @@ interface CliOptions {
   readonly manualList: readonly ManualTarget[];
   readonly buildTypes: readonly BuildType[];
   readonly minMajor: number;
-  readonly ccache: boolean;
-  readonly ccacheProgram: string;
-  readonly ccacheDir: string;
-  readonly ccacheBaseDir: string;
-  readonly ccacheMaxSize: string;
   readonly jobs: number;
   readonly dryRun: boolean;
   readonly artifactDir: string;
@@ -561,8 +556,6 @@ async function runBuildPlan(plan: BuildPlan, options: CliOptions): Promise<void>
     return;
   }
 
-  await setupCcache(options);
-
   for (const task of plan.tasks) {
     if (
       task.kind === "auto" &&
@@ -850,16 +843,9 @@ function buildTaskEnv(
 
   return compactEnv({
     ...process.env,
-    CCACHE_BASEDIR: options.ccacheBaseDir,
-    CCACHE_DIR: options.ccacheDir,
     SCRIPT_ARTIFACT_DIR: options.artifactDir,
     SCRIPT_BUILD_JOBS: String(options.jobs),
-    SCRIPT_CCACHE_BASEDIR: options.ccacheBaseDir,
-    SCRIPT_CCACHE_DIR: options.ccacheDir,
-    SCRIPT_CCACHE_MAX_SIZE: options.ccacheMaxSize,
-    SCRIPT_CCACHE_PROGRAM: options.ccacheProgram,
     SCRIPT_CMAKE_BUILD_TYPE: BUILD_TYPE_TO_CMAKE[buildType],
-    SCRIPT_ENABLE_CCACHE: options.ccache ? "1" : "0",
     SCRIPT_LLVM_DISTRIBUTION_COMPONENTS: buildCMakeDistributionComponents(),
     SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:
       experimentalLlvmTargetsToBuild.length > 0
@@ -875,17 +861,6 @@ function buildTaskEnv(
   });
 }
 
-async function setupCcache(options: CliOptions): Promise<void> {
-  if (!options.ccache || options.action === "package") {
-    return;
-  }
-
-  await fs.mkdir(options.ccacheDir, { recursive: true });
-  await runCommand(options.ccacheProgram, ["--set-config", `max_size=${options.ccacheMaxSize}`], {
-    dryRun: options.dryRun,
-  });
-}
-
 function parseCliOptions(argv: readonly string[]): CliOptions {
   const args = [...argv];
   const action = args.shift() ?? "help";
@@ -896,11 +871,6 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
   let scriptsDir = "scripts";
   let buildTypes: readonly BuildType[] = DEFAULT_BUILD_TYPES;
   let minMajor = 10;
-  let ccache = true;
-  let ccacheProgram = "ccache";
-  let ccacheDir = path.resolve(".cache", "ccache");
-  let ccacheBaseDir = process.cwd();
-  let ccacheMaxSize = "10G";
   let jobs = Math.max(1, os.cpus().length);
   let dryRun = false;
   let artifactDir = path.resolve("artifacts");
@@ -933,24 +903,6 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
         break;
       case "--min-major":
         minMajor = parsePositiveInt(takeValue(args, ++index, arg), arg);
-        break;
-      case "--ccache":
-        ccache = true;
-        break;
-      case "--no-ccache":
-        ccache = false;
-        break;
-      case "--ccache-program":
-        ccacheProgram = takeValue(args, ++index, arg);
-        break;
-      case "--ccache-dir":
-        ccacheDir = path.resolve(takeValue(args, ++index, arg));
-        break;
-      case "--ccache-base-dir":
-        ccacheBaseDir = path.resolve(takeValue(args, ++index, arg));
-        break;
-      case "--ccache-max-size":
-        ccacheMaxSize = takeValue(args, ++index, arg);
         break;
       case "--jobs":
         jobs = parsePositiveInt(takeValue(args, ++index, arg), arg);
@@ -1019,11 +971,6 @@ function parseCliOptions(argv: readonly string[]): CliOptions {
     manualList,
     buildTypes,
     minMajor,
-    ccache,
-    ccacheProgram,
-    ccacheDir,
-    ccacheBaseDir,
-    ccacheMaxSize,
     jobs,
     dryRun,
     artifactDir,
@@ -1473,9 +1420,6 @@ Options:
   --manual <worktree[:tag]>     Add a downstream/manual worktree target.
   --build-types <list>          release,relwithdebinfo.
   --min-major <number>          Ignore llvmorg tags older than this major.
-  --ccache | --no-ccache        Enable or disable ccache setup.
-  --ccache-dir <path>           ccache directory.
-  --ccache-max-size <size>      ccache max size, for example 10G.
   --jobs <number>               Ninja jobs exported to action scripts.
   --artifact-dir <path>         Package output directory.
   --package-prefix <name>       Package filename prefix.
