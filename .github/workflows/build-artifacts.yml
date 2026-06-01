@@ -229,6 +229,15 @@ jobs:
             --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
 
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Free packaging disk space
+        run: |
+          ccache --clear
+          rm -rf "${CCACHE_DIR}"
+
       - name: Package artifact
         run: |
           pnpm llvm package \
@@ -239,10 +248,6 @@ jobs:
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
             --package-target-triple "${{ matrix.target_triple }}"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -494,6 +499,15 @@ jobs:
             --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(nproc)"
 
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Free packaging disk space
+        run: |
+          ccache --clear
+          rm -rf "${CCACHE_DIR}"
+
       - name: Package artifact
         run: |
           pnpm llvm package \
@@ -504,10 +518,6 @@ jobs:
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
             --package-target-triple "${{ matrix.target_triple }}"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
@@ -600,6 +610,15 @@ jobs:
             --ccache-dir "${CCACHE_DIR}" \
             --jobs "$(sysctl -n hw.ncpu)"
 
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats
+
+      - name: Free packaging disk space
+        run: |
+          ccache --clear
+          rm -rf "${CCACHE_DIR}"
+
       - name: Package artifact
         run: |
           pnpm llvm package \
@@ -610,10 +629,6 @@ jobs:
             --package-prefix llvm-dist \
             --target-triples "${{ matrix.target_triple }}" \
             --package-target-triple "${{ matrix.target_triple }}"
-
-      - name: Show ccache stats
-        if: always()
-        run: ccache --show-stats
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
