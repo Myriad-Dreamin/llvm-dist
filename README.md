@@ -10,8 +10,9 @@ default build plan preserves the old allow-list versions:
 - `21.1.8`
 
 The generated LLVM distribution components include the clang and clang-tidy
-libraries used by clice, their static-library export dependencies, plus our
-extra `clang-repl` component.
+libraries used by clice, their static-library export dependencies, plus the
+`clangInterpreter` library and dependency closure used by the `clang-repl`
+package profile. The `clang-repl` executable component is not built or packaged.
 
 Target triples are mirrored from the Rust-style target triples used by tinymist
 releases. The default target triples are:

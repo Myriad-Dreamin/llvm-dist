@@ -249,11 +249,11 @@ jobs:
       SCRIPT_CMAKE_EXTRA_ARGS: >-
         -DCMAKE_SYSTEM_NAME=Linux
         -DCMAKE_SYSTEM_PROCESSOR=${{ matrix.cmake_system_processor }}
-        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
         -DLLVM_HOST_TRIPLE=${{ matrix.target_triple }}
         -DLLVM_DEFAULT_TARGET_TRIPLE=${{ matrix.target_triple }}
         -DLLVM_ENABLE_ZLIB=OFF
         -DLLVM_ENABLE_ZSTD=OFF
+        -DLLVM_PARALLEL_LINK_JOBS=1
 
     steps:
       - name: Install container dependencies
@@ -300,6 +300,13 @@ jobs:
             -DLLVM_INCLUDE_TESTS=OFF \
             -DLLVM_TARGETS_TO_BUILD=Native
           cmake --build llvm-native-tools --target llvm-tblgen clang-tblgen mlir-tblgen --parallel "$(nproc)"
+          mkdir -p "${RUNNER_TEMP}/native-tools/bin"
+          for tool in llvm-tblgen clang-tblgen mlir-tblgen; do
+            cp "llvm-native-tools/bin/${tool}" "${RUNNER_TEMP}/native-tools/bin/${tool}"
+            strip --strip-unneeded "${RUNNER_TEMP}/native-tools/bin/${tool}" || true
+          done
+          rm -rf llvm-native-tools
+          df -h "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}"
 
       - name: Resolve cross compilers
         shell: bash
@@ -428,7 +435,7 @@ jobs:
             }
 
           extra_cmake_args="${SCRIPT_CMAKE_EXTRA_ARGS:-}"
-          native_tools_bin="${GITHUB_WORKSPACE}/llvm-native-tools/bin"
+          native_tools_bin="${RUNNER_TEMP}/native-tools/bin"
           for tool in llvm-tblgen clang-tblgen mlir-tblgen; do
             if [[ ! -x "${native_tools_bin}/${tool}" ]]; then
               echo "::error::Missing native tablegen tool: ${native_tools_bin}/${tool}"
@@ -442,16 +449,24 @@ jobs:
             extra_cmake_args="${extra_cmake_args} -DCMAKE_C_COMPILER_TARGET=${target} -DCMAKE_CXX_COMPILER_TARGET=${target} -DCMAKE_ASM_COMPILER_TARGET=${target}"
           fi
 
+          build_jobs="$(nproc)"
+          if [[ "${{ matrix.build_type }}" == "relwithdebinfo" ]]; then
+            build_jobs=2
+          fi
+
           {
             echo "SCRIPT_C_COMPILER=${selected_c}"
             echo "SCRIPT_CXX_COMPILER=${selected_cxx}"
             echo "SCRIPT_ASM_COMPILER=${selected_c}"
             echo "SCRIPT_CMAKE_EXTRA_ARGS=${extra_cmake_args}"
+            echo "SCRIPT_STAGED_INSTALL=1"
+            echo "LLVM_BUILD_JOBS=${build_jobs}"
           } >>"${GITHUB_ENV}"
 
           echo "C compiler: ${selected_c}"
           echo "CXX compiler: ${selected_cxx}"
           echo "ASM compiler: ${selected_c}"
+          echo "Build jobs: ${build_jobs}"
           echo "extra CMake args: ${extra_cmake_args}"
 
       - name: Configure LLVM
@@ -461,7 +476,7 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --jobs "$(nproc)"
+            --jobs "${LLVM_BUILD_JOBS}"
 
       - name: Build and install distribution
         run: |
@@ -470,7 +485,7 @@ jobs:
             --allow "${LLVM_VERSION_NO_PREFIX}" \
             --build-types "${{ matrix.build_type }}" \
             --target-triples "${{ matrix.target_triple }}" \
-            --jobs "$(nproc)"
+            --jobs "${LLVM_BUILD_JOBS}"
 
       - name: Package artifact
         run: |

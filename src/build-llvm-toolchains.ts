@@ -207,6 +207,82 @@ export const BUILD_TYPE_TO_CMAKE = {
   relwithdebinfo: "RelWithDebInfo",
 } as const satisfies Record<BuildType, string>;
 
+export const CLANG_REPL_LIBRARY_COMPONENTS = [
+  "clangInterpreter",
+  "clangCodeGen",
+  "clangFrontendTool",
+  "clangExtractAPI",
+  "clangInstallAPI",
+  "clangRewriteFrontend",
+  "LLVMOrcJIT",
+  "LLVMOrcDebugging",
+  "LLVMOrcShared",
+  "LLVMOrcTargetProcess",
+  "LLVMTarget",
+  "LLVMExecutionEngine",
+  "LLVMRuntimeDyld",
+  "LLVMJITLink",
+  "LLVMCodeGen",
+  "LLVMAsmPrinter",
+  "LLVMMCDisassembler",
+  "LLVMCoverage",
+  "LLVMFrontendDriver",
+  "LLVMLTO",
+  "LLVMExtensions",
+  "LLVMTextAPIBinaryReader",
+  "LLVMPasses",
+  "LLVMCFGuard",
+  "LLVMGlobalISel",
+  "LLVMSelectionDAG",
+  "LLVMCGData",
+  "LLVMCodeGenTypes",
+  "LLVMIRPrinter",
+  "LLVMObjCARCOpts",
+  "LLVMCoroutines",
+  "LLVMHipStdPar",
+  "LLVMipo",
+  "LLVMInstrumentation",
+  "LLVMVectorize",
+  "LLVMLinker",
+  "LLVMSandboxIR",
+  "LLVMBitWriter",
+] as const;
+
+const CLANG_REPL_TARGET_COMPONENTS = {
+  AArch64: [
+    "LLVMAArch64CodeGen",
+    "LLVMAArch64AsmParser",
+    "LLVMAArch64Desc",
+    "LLVMAArch64Disassembler",
+    "LLVMAArch64Info",
+    "LLVMAArch64Utils",
+  ],
+  ARM: [
+    "LLVMARMCodeGen",
+    "LLVMARMAsmParser",
+    "LLVMARMDesc",
+    "LLVMARMDisassembler",
+    "LLVMARMInfo",
+    "LLVMARMUtils",
+  ],
+  LoongArch: [
+    "LLVMLoongArchCodeGen",
+    "LLVMLoongArchAsmParser",
+    "LLVMLoongArchDesc",
+    "LLVMLoongArchDisassembler",
+    "LLVMLoongArchInfo",
+  ],
+  RISCV: [
+    "LLVMRISCVCodeGen",
+    "LLVMRISCVAsmParser",
+    "LLVMRISCVDesc",
+    "LLVMRISCVDisassembler",
+    "LLVMRISCVInfo",
+    "LLVMRISCVUtils",
+  ],
+  X86: ["LLVMX86CodeGen", "LLVMX86AsmParser", "LLVMX86Desc", "LLVMX86Disassembler", "LLVMX86Info"],
+} as const satisfies Record<LlvmTargetName, readonly string[]>;
+
 export const LLVM_PACKAGE_PROFILES = [
   {
     name: "llvm-core",
@@ -329,7 +405,7 @@ export const LLVM_PACKAGE_PROFILES = [
   {
     name: "clang-repl",
     dependsOn: ["llvm-core", "clang-sdk"],
-    components: ["clang-repl"],
+    components: CLANG_REPL_LIBRARY_COMPONENTS,
   },
 ] as const satisfies readonly PackageProfile[];
 
@@ -341,11 +417,12 @@ export const CLICE_LLVM_COMPONENTS = uniqueStrings(
   ),
 );
 
-export const EXTRA_LLVM_COMPONENTS = ["clang-repl"] as const;
+export const EXTRA_LLVM_COMPONENTS = CLANG_REPL_LIBRARY_COMPONENTS;
 
 export const LLVM_DISTRIBUTION_COMPONENTS = uniqueStrings([
   ...CLICE_LLVM_COMPONENTS,
   ...EXTRA_LLVM_COMPONENTS,
+  ...clangReplTargetComponentsForTriples(DEFAULT_TARGET_TRIPLES.map((target) => target.triple)),
 ]);
 
 const PACKAGE_PROFILE_BY_NAME = new Map(
@@ -446,14 +523,44 @@ export function tagSuffixToPathSuffix(suffix: string): string {
   return suffix === RELEASE_SUFFIX_MARKER ? "" : suffix;
 }
 
-export function buildCMakeDistributionComponents(): string {
-  return LLVM_DISTRIBUTION_COMPONENTS.join(";");
+export function buildCMakeDistributionComponents(targetTriples?: readonly string[]): string {
+  return uniqueStrings([
+    ...CLICE_LLVM_COMPONENTS,
+    ...EXTRA_LLVM_COMPONENTS,
+    ...clangReplTargetComponentsForTriples(targetTriples),
+  ]).join(";");
 }
 
-export function llvmTargetsToBuildForTriples(targetTriples: readonly string[]): readonly string[] {
+export function llvmTargetsToBuildForTriples(
+  targetTriples: readonly string[],
+): readonly LlvmTargetName[] {
   return uniqueStrings(
     targetTriples.map((targetTriple) => requiredTargetTriple(targetTriple).llvmTarget),
+  ) as readonly LlvmTargetName[];
+}
+
+export function clangReplTargetComponentsForTriples(
+  targetTriples: readonly string[] = DEFAULT_TARGET_TRIPLES.map((target) => target.triple),
+): readonly string[] {
+  return uniqueStrings(
+    llvmTargetsToBuildForTriples(targetTriples).flatMap(
+      (llvmTarget) => CLANG_REPL_TARGET_COMPONENTS[llvmTarget],
+    ),
   );
+}
+
+function packageProfileComponents(
+  profile: PackageProfile,
+  targetTriples: readonly string[] | undefined,
+): readonly string[] {
+  if (profile.name !== "clang-repl") {
+    return profile.components;
+  }
+
+  return uniqueStrings([
+    ...profile.components,
+    ...clangReplTargetComponentsForTriples(targetTriples),
+  ]);
 }
 
 export function stableLlvmTargetsToBuildForVersion(
@@ -500,7 +607,7 @@ async function main(): Promise<void> {
   }
 
   if (options.action === "components") {
-    console.log(buildCMakeDistributionComponents());
+    console.log(buildCMakeDistributionComponents(options.targetTriples));
     return;
   }
 
@@ -623,7 +730,7 @@ async function packageBuild(
     const profileStagingDir = path.join(stagingRoot, profile.name);
     await fs.mkdir(profileStagingDir, { recursive: true });
 
-    for (const component of profile.components) {
+    for (const component of packageProfileComponents(profile, options.targetTriples)) {
       await runCommand(
         "cmake",
         ["--install", ".", "--component", component, "--prefix", profileStagingDir],
@@ -846,7 +953,7 @@ function buildTaskEnv(
     SCRIPT_ARTIFACT_DIR: options.artifactDir,
     SCRIPT_BUILD_JOBS: String(options.jobs),
     SCRIPT_CMAKE_BUILD_TYPE: BUILD_TYPE_TO_CMAKE[buildType],
-    SCRIPT_LLVM_DISTRIBUTION_COMPONENTS: buildCMakeDistributionComponents(),
+    SCRIPT_LLVM_DISTRIBUTION_COMPONENTS: buildCMakeDistributionComponents(options.targetTriples),
     SCRIPT_LLVM_EXPERIMENTAL_TARGETS_TO_BUILD:
       experimentalLlvmTargetsToBuild.length > 0
         ? experimentalLlvmTargetsToBuild.join(";")
@@ -1249,7 +1356,7 @@ function inferArtifactMetadata(
       ...legacyPlatformMetadata,
       ...targetTripleMetadata,
       dependsOn: profile.dependsOn,
-      components: profile.components,
+      components: packageProfileComponents(profile, targetTriple ? [targetTriple] : undefined),
     };
   }
 
