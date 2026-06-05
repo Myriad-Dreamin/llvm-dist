@@ -12,12 +12,7 @@ import { pathToFileURL } from "node:url";
 export type VersionTuple = readonly [major: number, minor: number, patch: number];
 export type BuildType = "release" | "relwithdebinfo";
 export type LlvmTargetName = "AArch64" | "ARM" | "LoongArch" | "RISCV" | "X86";
-export type PackageProfileName =
-  | "llvm-core"
-  | "clang-sdk"
-  | "clang-tooling"
-  | "clang-tidy"
-  | "clang-repl";
+export type PackageProfileName = "llvm-core" | "clang-sdk" | "clang-tooling" | "clang-tidy";
 
 export interface TargetTripleDefinition {
   readonly triple: string;
@@ -207,82 +202,6 @@ export const BUILD_TYPE_TO_CMAKE = {
   relwithdebinfo: "RelWithDebInfo",
 } as const satisfies Record<BuildType, string>;
 
-export const CLANG_REPL_LIBRARY_COMPONENTS = [
-  "clangInterpreter",
-  "clangCodeGen",
-  "clangFrontendTool",
-  "clangExtractAPI",
-  "clangInstallAPI",
-  "clangRewriteFrontend",
-  "LLVMOrcJIT",
-  "LLVMOrcDebugging",
-  "LLVMOrcShared",
-  "LLVMOrcTargetProcess",
-  "LLVMTarget",
-  "LLVMExecutionEngine",
-  "LLVMRuntimeDyld",
-  "LLVMJITLink",
-  "LLVMCodeGen",
-  "LLVMAsmPrinter",
-  "LLVMMCDisassembler",
-  "LLVMCoverage",
-  "LLVMFrontendDriver",
-  "LLVMLTO",
-  "LLVMExtensions",
-  "LLVMTextAPIBinaryReader",
-  "LLVMPasses",
-  "LLVMCFGuard",
-  "LLVMGlobalISel",
-  "LLVMSelectionDAG",
-  "LLVMCGData",
-  "LLVMCodeGenTypes",
-  "LLVMIRPrinter",
-  "LLVMObjCARCOpts",
-  "LLVMCoroutines",
-  "LLVMHipStdPar",
-  "LLVMipo",
-  "LLVMInstrumentation",
-  "LLVMVectorize",
-  "LLVMLinker",
-  "LLVMSandboxIR",
-  "LLVMBitWriter",
-] as const;
-
-const CLANG_REPL_TARGET_COMPONENTS = {
-  AArch64: [
-    "LLVMAArch64CodeGen",
-    "LLVMAArch64AsmParser",
-    "LLVMAArch64Desc",
-    "LLVMAArch64Disassembler",
-    "LLVMAArch64Info",
-    "LLVMAArch64Utils",
-  ],
-  ARM: [
-    "LLVMARMCodeGen",
-    "LLVMARMAsmParser",
-    "LLVMARMDesc",
-    "LLVMARMDisassembler",
-    "LLVMARMInfo",
-    "LLVMARMUtils",
-  ],
-  LoongArch: [
-    "LLVMLoongArchCodeGen",
-    "LLVMLoongArchAsmParser",
-    "LLVMLoongArchDesc",
-    "LLVMLoongArchDisassembler",
-    "LLVMLoongArchInfo",
-  ],
-  RISCV: [
-    "LLVMRISCVCodeGen",
-    "LLVMRISCVAsmParser",
-    "LLVMRISCVDesc",
-    "LLVMRISCVDisassembler",
-    "LLVMRISCVInfo",
-    "LLVMRISCVUtils",
-  ],
-  X86: ["LLVMX86CodeGen", "LLVMX86AsmParser", "LLVMX86Desc", "LLVMX86Disassembler", "LLVMX86Info"],
-} as const satisfies Record<LlvmTargetName, readonly string[]>;
-
 export const LLVM_PACKAGE_PROFILES = [
   {
     name: "llvm-core",
@@ -402,27 +321,19 @@ export const LLVM_PACKAGE_PROFILES = [
       "clangTidyZirconModule",
     ],
   },
-  {
-    name: "clang-repl",
-    dependsOn: ["llvm-core", "clang-sdk"],
-    components: CLANG_REPL_LIBRARY_COMPONENTS,
-  },
 ] as const satisfies readonly PackageProfile[];
 
 export const DEFAULT_PACKAGE_PROFILES = LLVM_PACKAGE_PROFILES.map((profile) => profile.name);
 
 export const CLICE_LLVM_COMPONENTS = uniqueStrings(
-  LLVM_PACKAGE_PROFILES.filter((profile) => profile.name !== "clang-repl").flatMap(
-    (profile) => profile.components,
-  ),
+  LLVM_PACKAGE_PROFILES.flatMap((profile) => profile.components),
 );
 
-export const EXTRA_LLVM_COMPONENTS = CLANG_REPL_LIBRARY_COMPONENTS;
+export const EXTRA_LLVM_COMPONENTS = [] as const;
 
 export const LLVM_DISTRIBUTION_COMPONENTS = uniqueStrings([
   ...CLICE_LLVM_COMPONENTS,
   ...EXTRA_LLVM_COMPONENTS,
-  ...clangReplTargetComponentsForTriples(DEFAULT_TARGET_TRIPLES.map((target) => target.triple)),
 ]);
 
 const PACKAGE_PROFILE_BY_NAME = new Map(
@@ -524,11 +435,8 @@ export function tagSuffixToPathSuffix(suffix: string): string {
 }
 
 export function buildCMakeDistributionComponents(targetTriples?: readonly string[]): string {
-  return uniqueStrings([
-    ...CLICE_LLVM_COMPONENTS,
-    ...EXTRA_LLVM_COMPONENTS,
-    ...clangReplTargetComponentsForTriples(targetTriples),
-  ]).join(";");
+  void targetTriples;
+  return uniqueStrings([...CLICE_LLVM_COMPONENTS, ...EXTRA_LLVM_COMPONENTS]).join(";");
 }
 
 export function llvmTargetsToBuildForTriples(
@@ -539,28 +447,12 @@ export function llvmTargetsToBuildForTriples(
   ) as readonly LlvmTargetName[];
 }
 
-export function clangReplTargetComponentsForTriples(
-  targetTriples: readonly string[] = DEFAULT_TARGET_TRIPLES.map((target) => target.triple),
-): readonly string[] {
-  return uniqueStrings(
-    llvmTargetsToBuildForTriples(targetTriples).flatMap(
-      (llvmTarget) => CLANG_REPL_TARGET_COMPONENTS[llvmTarget],
-    ),
-  );
-}
-
 function packageProfileComponents(
   profile: PackageProfile,
   targetTriples: readonly string[] | undefined,
 ): readonly string[] {
-  if (profile.name !== "clang-repl") {
-    return profile.components;
-  }
-
-  return uniqueStrings([
-    ...profile.components,
-    ...clangReplTargetComponentsForTriples(targetTriples),
-  ]);
+  void targetTriples;
+  return profile.components;
 }
 
 export function stableLlvmTargetsToBuildForVersion(
@@ -1530,7 +1422,7 @@ Options:
   --jobs <number>               Ninja jobs exported to action scripts.
   --artifact-dir <path>         Package output directory.
   --package-prefix <name>       Package filename prefix.
-  --package-profiles <list>     Package profiles: llvm-core,clang-sdk,clang-tooling,clang-tidy,clang-repl.
+  --package-profiles <list>     Package profiles: llvm-core,clang-sdk,clang-tooling,clang-tidy.
   --package-target-triple <triple> Package filename target triple segment.
   --package-target <name>       Legacy package filename target segment.
   --platform <name>             Legacy alias for --package-target.
