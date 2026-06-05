@@ -10,9 +10,9 @@ default build plan preserves the old allow-list versions:
 - `21.1.8`
 
 The generated LLVM distribution components include the clang and clang-tidy
-libraries used by clice, their static-library export dependencies, plus the
-`clangInterpreter` library and dependency closure used by the `clang-repl`
-package profile. The `clang-repl` executable component is not built or packaged.
+libraries used by clice and their static-library export dependencies. The
+`clang-repl` executable and `clangInterpreter` dependency closure are not built
+or packaged by the default release workflow.
 
 Target triples are mirrored from the Rust-style target triples used by tinymist
 releases. The default target triples are:
@@ -49,7 +49,6 @@ Artifacts are split by component profile to stay below GitHub artifact limits:
 - `clang-sdk`
 - `clang-tooling`
 - `clang-tidy`
-- `clang-repl`
 - `pdb`, generated only when `.pdb` files are present
 
 There is intentionally no `full` artifact.
@@ -90,7 +89,6 @@ llvm-dist-llvm-core-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.x
 llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
 llvm-dist-clang-tooling-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
 llvm-dist-clang-tidy-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
-llvm-dist-clang-repl-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz
 llvm-dist-pdb-llvmorg-21.1.8-relwithdebinfo-x86_64-pc-windows-msvc.tar.xz
 ```
 

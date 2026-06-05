@@ -276,6 +276,32 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          echo "Disk before cleanup:"
+          df -h "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" / || true
+          du -sh /__t/* 2>/dev/null || true
+
+          rm -rf \
+            /__t/CodeQL \
+            /__t/go \
+            /__t/Python \
+            /__t/PyPy \
+            /__t/Ruby \
+            /__t/Java_Temurin-Hotspot_jdk \
+            /__t/Java_Zulu_jdk \
+            /opt/ghc \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet
+
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+
+          echo "Disk after cleanup:"
+          df -h "${GITHUB_WORKSPACE}" "${RUNNER_TEMP}" / || true
+
       - name: Checkout LLVM source
         uses: actions/checkout@v4
         with:

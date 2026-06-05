@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   BUILD_TYPE_TO_CMAKE,
-  CLANG_REPL_LIBRARY_COMPONENTS,
   CLICE_LLVM_COMPONENTS,
   DEFAULT_TARGET_TRIPLES,
   DEFAULT_LLVM_TARGETS_TO_BUILD,
@@ -12,7 +11,6 @@ import {
   LLVM_DISTRIBUTION_COMPONENTS,
   LLVM_PACKAGE_PROFILES,
   buildCMakeDistributionComponents,
-  clangReplTargetComponentsForTriples,
   createArtifactDescriptor,
   createBuildPlan,
   defaultTargetTriplesForPlatform,
@@ -113,9 +111,9 @@ describe("distribution components", () => {
       "clang-sdk",
       "clang-tooling",
       "clang-tidy",
-      "clang-repl",
     ]);
     expect(DEFAULT_PACKAGE_PROFILES).not.toContain("full");
+    expect(DEFAULT_PACKAGE_PROFILES).not.toContain("clang-repl");
     expect(
       LLVM_PACKAGE_PROFILES.find((profile) => profile.name === "llvm-core")?.components,
     ).toContain("LLVMSupport");
@@ -124,33 +122,15 @@ describe("distribution components", () => {
     ).toEqual(["llvm-core", "clang-sdk"]);
   });
 
-  it("contains clice-linked components plus clang interpreter", () => {
+  it("contains clice-linked components without clang-repl", () => {
     expect(CLICE_LLVM_COMPONENTS).toContain("clangToolingInclusions");
     expect(CLICE_LLVM_COMPONENTS).toContain("clangTidyReadabilityModule");
-    expect(EXTRA_LLVM_COMPONENTS).toBe(CLANG_REPL_LIBRARY_COMPONENTS);
-    expect(LLVM_DISTRIBUTION_COMPONENTS).toContain("clangInterpreter");
-    expect(LLVM_DISTRIBUTION_COMPONENTS).toContain("LLVMX86CodeGen");
-    expect(LLVM_DISTRIBUTION_COMPONENTS).toContain("LLVMAArch64CodeGen");
+    expect(EXTRA_LLVM_COMPONENTS).toEqual([]);
+    expect(LLVM_DISTRIBUTION_COMPONENTS).not.toContain("clangInterpreter");
+    expect(LLVM_DISTRIBUTION_COMPONENTS).not.toContain("LLVMX86CodeGen");
+    expect(LLVM_DISTRIBUTION_COMPONENTS).not.toContain("LLVMAArch64CodeGen");
     expect(LLVM_DISTRIBUTION_COMPONENTS).not.toContain("clang-repl");
     expect(new Set(LLVM_DISTRIBUTION_COMPONENTS).size).toBe(LLVM_DISTRIBUTION_COMPONENTS.length);
-  });
-
-  it("adds only selected target backend components for clang-repl libraries", () => {
-    expect(clangReplTargetComponentsForTriples(["aarch64-unknown-linux-gnu"])).toEqual([
-      "LLVMAArch64CodeGen",
-      "LLVMAArch64AsmParser",
-      "LLVMAArch64Desc",
-      "LLVMAArch64Disassembler",
-      "LLVMAArch64Info",
-      "LLVMAArch64Utils",
-    ]);
-    expect(clangReplTargetComponentsForTriples(["x86_64-unknown-linux-musl"])).toEqual([
-      "LLVMX86CodeGen",
-      "LLVMX86AsmParser",
-      "LLVMX86Desc",
-      "LLVMX86Disassembler",
-      "LLVMX86Info",
-    ]);
   });
 
   it("includes the static-library export closure required by LLVM 21", () => {
@@ -179,8 +159,8 @@ describe("distribution components", () => {
   it("formats distribution components for CMake", () => {
     const cmakeValue = buildCMakeDistributionComponents(["x86_64-unknown-linux-musl"]);
     expect(cmakeValue).toContain("LLVMSupport;LLVMFrontendOpenMP");
-    expect(cmakeValue).toContain(";clangInterpreter;");
-    expect(cmakeValue).toContain(";LLVMX86CodeGen;");
+    expect(cmakeValue).not.toContain(";clangInterpreter;");
+    expect(cmakeValue).not.toContain(";LLVMX86CodeGen;");
     expect(cmakeValue).not.toContain("clang-repl");
     expect(cmakeValue).not.toContain("LLVMAArch64CodeGen");
   });
