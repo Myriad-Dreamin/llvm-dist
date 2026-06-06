@@ -11,6 +11,14 @@ echo "ASM compiler: ${SCRIPT_ASM_COMPILER:-default}"
 
 rm -f CMakeCache.txt
 
+if [[ -n "${SCRIPT_LLVM_ENABLE_PROJECTS:-}" ]]; then
+  llvm_enable_projects="${SCRIPT_LLVM_ENABLE_PROJECTS}"
+elif [[ "${SCRIPT_CMAKE_BUILD_TYPE}" == "Release" ]]; then
+  llvm_enable_projects="clang;clang-tools-extra;compiler-rt;lld;mlir"
+else
+  llvm_enable_projects="clang;clang-tools-extra;lld;mlir"
+fi
+
 cmake_args=(
   "../../llvm"
   "-G"
@@ -20,7 +28,7 @@ cmake_args=(
   "-DLLVM_INCLUDE_TESTS=OFF"
   "-DLLVM_ENABLE_ZLIB=ON"
   "-DLLVM_ENABLE_ZSTD=ON"
-  "-DLLVM_ENABLE_PROJECTS=${SCRIPT_LLVM_ENABLE_PROJECTS:-clang;clang-tools-extra;compiler-rt;lld;mlir}"
+  "-DLLVM_ENABLE_PROJECTS=${llvm_enable_projects}"
   "-DLLVM_TARGETS_TO_BUILD=${SCRIPT_LLVM_TARGETS_TO_BUILD:-X86}"
   "-DLLVM_DISTRIBUTION_COMPONENTS=${SCRIPT_LLVM_DISTRIBUTION_COMPONENTS}"
   "-DCMAKE_INSTALL_PREFIX=${PWD}/dist"
