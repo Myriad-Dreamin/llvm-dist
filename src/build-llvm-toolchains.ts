@@ -769,6 +769,9 @@ export function createReleaseBody(descriptor: ArtifactDescriptor): string {
   );
 
   const releaseName = llvmTags.length === 1 ? requiredArrayItem(llvmTags, 0) : "LLVM";
+  const releaseTag = releaseName.startsWith("llvmorg-")
+    ? `v${releaseName.slice("llvmorg-".length)}`
+    : releaseName;
   const lines = [
     `# ${releaseName} Distribution`,
     "",
@@ -784,12 +787,19 @@ export function createReleaseBody(descriptor: ArtifactDescriptor): string {
     "",
     "## Targets",
     "",
-    "| Target triple | Release | RelWithDebInfo |",
-    "| --- | ---: | ---: |",
-    ...targetTriples.map((targetTriple) => {
-      const releaseCount = artifactGroups.get(`${targetTriple}:release`)?.length ?? 0;
-      const relWithDebInfoCount = artifactGroups.get(`${targetTriple}:relwithdebinfo`)?.length ?? 0;
-      return `| ${targetTriple} | ${releaseCount} | ${relWithDebInfoCount} |`;
+    ...releaseBodyTargetTableLines({
+      buildType: "release",
+      packageNames,
+      releaseTag,
+      targetTriples,
+      artifactGroups,
+    }),
+    ...releaseBodyTargetTableLines({
+      buildType: "relwithdebinfo",
+      packageNames,
+      releaseTag,
+      targetTriples,
+      artifactGroups,
     }),
     "",
     "## Package Profiles",
@@ -834,6 +844,44 @@ function groupDescriptorArtifacts(
     groups.set(key, group);
   }
   return groups;
+}
+
+function releaseBodyTargetTableLines(options: {
+  readonly artifactGroups: ReadonlyMap<string, readonly ArtifactDescriptorEntry[]>;
+  readonly buildType: BuildType;
+  readonly packageNames: readonly (PackageProfileName | "pdb")[];
+  readonly releaseTag: string;
+  readonly targetTriples: readonly string[];
+}): string[] {
+  const packageNames = options.packageNames.filter((packageName) => packageName !== "pdb");
+  return [
+    `### ${BUILD_TYPE_TO_CMAKE[options.buildType]}`,
+    "",
+    `| Target triple | ${packageNames.map((packageName) => `\`${packageName}\``).join(" | ")} |`,
+    `| --- | ${packageNames.map(() => "---").join(" | ")} |`,
+    ...options.targetTriples.map((targetTriple) => {
+      const artifacts = options.artifactGroups.get(`${targetTriple}:${options.buildType}`) ?? [];
+      const artifactByPackage = new Map(artifacts.map((artifact) => [artifact.package, artifact]));
+      const links = packageNames.map((packageName) =>
+        releaseBodyArtifactLink(artifactByPackage.get(packageName), options.releaseTag),
+      );
+      return `| ${targetTriple} | ${links.join(" | ")} |`;
+    }),
+    "",
+  ];
+}
+
+function releaseBodyArtifactLink(
+  artifact: ArtifactDescriptorEntry | undefined,
+  releaseTag: string,
+): string {
+  if (!artifact) {
+    return "-";
+  }
+
+  return `[archive](https://github.com/Myriad-Dreamin/llvm-dist/releases/download/${releaseTag}/${encodeURIComponent(
+    artifact.name,
+  )})`;
 }
 
 function releaseBodyPackageProfileLines(

@@ -327,7 +327,14 @@ describe("release body", () => {
 
     expect(body).toContain("# llvmorg-21.1.8 Distribution");
     expect(body).toContain("- Archive artifacts: 2");
-    expect(body).toContain("| x86_64-unknown-linux-gnu | 1 | 1 |");
+    expect(body).toContain("### Release");
+    expect(body).toContain("### RelWithDebInfo");
+    expect(body).toContain(
+      "| x86_64-unknown-linux-gnu | [archive](https://github.com/Myriad-Dreamin/llvm-dist/releases/download/v21.1.8/llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz) | - |",
+    );
+    expect(body).toContain(
+      "| x86_64-unknown-linux-gnu | - | [archive](https://github.com/Myriad-Dreamin/llvm-dist/releases/download/v21.1.8/llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz) |",
+    );
     expect(body).toContain("- `llvm-core`:");
     expect(body).toContain("- `clang-sdk`:");
     expect(body).toContain("`descriptor.json` lists every archive");
