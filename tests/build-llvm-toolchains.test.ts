@@ -12,6 +12,7 @@ import {
   LLVM_PACKAGE_PROFILES,
   buildCMakeDistributionComponents,
   createArtifactDescriptor,
+  createReleaseBody,
   createBuildPlan,
   defaultTargetTriplesForPlatform,
   experimentalLlvmTargetsToBuildForVersion,
@@ -284,6 +285,60 @@ describe("artifact descriptor", () => {
     } finally {
       await rm(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("release body", () => {
+  it("summarizes descriptor targets and package profiles", () => {
+    const body = createReleaseBody({
+      schemaVersion: 1,
+      generatedAt: "2026-06-08T00:00:00.000Z",
+      packagePrefix: "llvm-dist",
+      artifactCount: 2,
+      artifacts: [
+        {
+          name: "llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz",
+          path: "llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz",
+          size: 4,
+          sha256: "0".repeat(64),
+          package: "llvm-core",
+          type: "component-package",
+          llvmTag: "llvmorg-21.1.8",
+          buildType: "release",
+          targetTriple: "x86_64-unknown-linux-gnu",
+          dependsOn: [],
+          components: ["LLVMSupport"],
+        },
+        {
+          name: "llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz",
+          path: "llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz",
+          size: 3,
+          sha256: "1".repeat(64),
+          package: "clang-sdk",
+          type: "component-package",
+          llvmTag: "llvmorg-21.1.8",
+          buildType: "relwithdebinfo",
+          targetTriple: "x86_64-unknown-linux-gnu",
+          dependsOn: ["llvm-core"],
+          components: ["clangBasic"],
+        },
+      ],
+    });
+
+    expect(body).toContain("# llvmorg-21.1.8 Distribution");
+    expect(body).toContain("- Archive artifacts: 2");
+    expect(body).toContain("### Release");
+    expect(body).toContain("### RelWithDebInfo");
+    expect(body).toContain(
+      "| x86_64-unknown-linux-gnu | [archive](https://github.com/Myriad-Dreamin/llvm-dist/releases/download/v21.1.8/llvm-dist-llvm-core-llvmorg-21.1.8-release-x86_64-unknown-linux-gnu.tar.xz) | - |",
+    );
+    expect(body).toContain(
+      "| x86_64-unknown-linux-gnu | - | [archive](https://github.com/Myriad-Dreamin/llvm-dist/releases/download/v21.1.8/llvm-dist-clang-sdk-llvmorg-21.1.8-relwithdebinfo-x86_64-unknown-linux-gnu.tar.xz) |",
+    );
+    expect(body).toContain("- `llvm-core`:");
+    expect(body).toContain("- `clang-sdk`:");
+    expect(body).toContain("`descriptor.json` lists every archive");
+    expect(body).toContain("`clang-repl` is not part of the current default package set.");
   });
 });
 

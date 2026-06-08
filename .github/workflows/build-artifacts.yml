@@ -770,6 +770,14 @@ jobs:
             --package-prefix llvm-dist \
             --descriptor-name descriptor.json
 
+      - name: Generate release body
+        if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
+        run: |
+          pnpm llvm release-body \
+            --artifact-dir artifacts/release \
+            --descriptor-name descriptor.json \
+            --release-body-name release.md
+
       - name: Upload descriptor
         if: ${{ needs.prepare.outputs.target_batch == 'batch-6' || needs.prepare.outputs.target_batch == 'all' }}
         uses: actions/upload-artifact@v4
@@ -778,6 +786,7 @@ jobs:
           path: |
             artifacts/release/descriptor.json
             artifacts/release/descriptor.json.sha256
+            artifacts/release/release.md
             artifacts/release/*.sha256
           if-no-files-found: error
           retention-days: 14
@@ -798,6 +807,7 @@ jobs:
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
           overwrite_files: true
+          body_path: artifacts/release/release.md
           files: |
             artifacts/current/*.tar.xz
             artifacts/release/descriptor.json
